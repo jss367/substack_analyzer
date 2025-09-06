@@ -19,7 +19,7 @@ def sidebar_inputs() -> SimulationInputs:
     st.sidebar.header("Assumptions")
 
     with st.sidebar.expander("Starting point", expanded=True):
-        start_free = st.number_input("Starting free subscribers", min_value=0, value=1366, step=10)
+        start_free = st.number_input("Starting free subscribers", min_value=0, value=1000, step=10)
         start_premium = st.number_input("Starting premium subscribers", min_value=0, value=30, step=1)
 
     with st.sidebar.expander("Horizon", expanded=False):
