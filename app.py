@@ -218,7 +218,8 @@ def render_help() -> None:
     st.markdown(
         """
 1) Organic monthly growth (free)
-- Use Subscribers over time (or export). Compute organic new = total new free − new free from ads. Monthly organic rate ≈ organic new ÷ (months × average free).
+- Use Subscribers over time (or export). Compute organic new = total new free − new free from ads.
+- Monthly organic rate ≈ organic new ÷ (months × average free base).
 
 2) Monthly churn (free and premium)
 - Use unsubscribes + list cleaning totals. Monthly churn ≈ churned ÷ (months × average cohort size).
@@ -227,7 +228,7 @@ def render_help() -> None:
 - CAC = ad spend ÷ new free from ads in the same period. Use your ad manager or Substack source tags.
 
 4) New-subscriber premium conversion
-- In a recent month, take new premium that arrived from brand‑new free signups ÷ number of new free that month.
+- In a recent month, new premium from brand‑new free signups ÷ number of new free that month.
 
 5) Ongoing premium conversion of existing free
 - Premium upgrades not tied to first‑month signups ÷ (months × average free).
@@ -236,16 +237,97 @@ def render_help() -> None:
 - Defaults: Substack 10%, Stripe 3.6% + $0.30. Adjust to your setup.
 
 7) Ad spend schedule
-- Two-stage lets you set higher months 0–23 and lower 24–59; Constant uses one number.
+- Two-stage: months 0–23 vs 24–59. Constant: one number.
 
-Use the Estimators tab to compute these from a few copy/paste numbers, then plug them into the Simulator in the sidebar.
+Use the Estimators tab to compute these, then plug them into the Simulator sidebar.
+        """
+    )
+
+
+def render_outputs_formulas() -> None:
+    st.subheader("Outputs and formulas")
+
+    st.markdown(
+        """
+### Subscribers
+- **Free subscribers (month m)**
+  - **Inputs**: starting_free_subscribers, monthly_churn_rate_free, organic_monthly_growth_rate,
+    ad_spend_schedule, cost_per_new_free_subscriber, new_subscriber_premium_conv_rate,
+    ongoing_premium_conv_rate
+  - **Calc**:
+    - free_churned = free_prev × churn_free
+    - free_after_churn = free_prev − free_churned
+    - new_free_organic = free_after_churn × organic_growth
+    - ad_spend_m = schedule(m); new_free_paid = ad_spend_m ÷ CAC
+    - new_free_total = new_free_organic + new_free_paid
+    - convert_from_new = new_free_total × new_subscriber_premium_conv_rate
+    - convert_from_existing = max(free_after_churn + new_free_total − new_free_total, 0) × ongoing_rate
+    - free_m = free_after_churn + new_free_total − (convert_from_new + convert_from_existing)
+
+- **Premium subscribers (month m)**
+  - **Inputs**: starting_premium_subscribers, monthly_churn_rate_premium,
+    new_subscriber_premium_conv_rate, ongoing_premium_conv_rate (and free dynamics above)
+  - **Calc**:
+    - prem_churned = prem_prev × churn_premium
+    - prem_after_churn = prem_prev − prem_churned
+    - prem_m = prem_after_churn + convert_from_new + convert_from_existing
+
+- **Total subscribers** = free_m + prem_m
+
+### Revenue
+- **Net monthly revenue per premium**
+  - **Inputs**: premium_monthly_price_gross, substack_fee_pct, stripe_fee_pct, stripe_flat_fee
+  - **Calc**: net_monthly_per_premium = gross × (1 − substack − stripe) − stripe_flat
+
+- **Net annual revenue per premium**
+  - **Inputs**: premium_annual_price_gross, substack_fee_pct, stripe_fee_pct, stripe_flat_fee
+  - **Calc**: net_annual_per_premium = gross × (1 − substack − stripe) − stripe_flat
+
+- **Net MRR (month m)**
+  - **Inputs**: premium_subscribers_m, annual_share, net_monthly_per_premium
+  - **Calc**: monthly_premium = prem_m × (1 − annual_share)
+    - mrr_net = monthly_premium × net_monthly_per_premium
+
+- **Net revenue (month m)**
+  - **Inputs**: mrr_net, annual_share, net_annual_per_premium
+  - **Calc**: annual_revenue_amortized = (prem_m × annual_share × net_annual_per_premium) ÷ 12
+    - net_revenue = mrr_net + annual_revenue_amortized
+
+### Costs and profit
+- **Ad spend (month m)**
+  - **Inputs**: ad_spend_schedule
+  - **Calc**: ad_spend_m = schedule(m)
+
+- **Ad manager fee (month m)**
+  - **Inputs**: ad_manager_monthly_fee
+  - **Calc**: ad_manager_fee_m = ad_manager_monthly_fee if ad_spend_m > 0 else 0
+
+- **Profit (month m)**
+  - **Calc**: profit_m = net_revenue − ad_spend_m − ad_manager_fee_m
+
+- **Cumulative net profit** = Σ profit_m up to m
+- **Cumulative ad spend** = Σ ad_spend_m up to m
+
+### Unit economics & milestones (from the time series)
+- **ROAS (net)** = Σ net_revenue ÷ Σ ad_spend
+- **Blended CAC (paid only)** = Σ ad_spend ÷ Σ new_free_paid
+- **Payback month** = first m where cumulative_net_profit > 0
         """
     )
 
 
 st.title("Substack Ads ROI Simulator")
 
-tab_sim, tab_est, tab_help = st.tabs(["Simulator", "Estimators", "Help"])
+# Tabs
+with st.container():
+    tab_sim, tab_est, tab_help, tab_out = st.tabs(
+        [
+            "Simulator",
+            "Estimators",
+            "Help",
+            "Outputs & Formulas",
+        ]
+    )
 
 with tab_sim:
     inputs = sidebar_inputs()
@@ -256,7 +338,8 @@ with tab_sim:
         st.dataframe(df, width="stretch")
     render_charts(df)
     st.caption(
-        "MVP model: instant conversion of a share of new free subs, small ongoing conversion of existing free base, and simple net revenue after Substack + Stripe fees."
+        "MVP model: instant conversion of a share of new free subs, small ongoing conversion of existing free base, "
+        "and simple net revenue after Substack + Stripe fees."
     )
 
 with tab_est:
@@ -264,3 +347,6 @@ with tab_est:
 
 with tab_help:
     render_help()
+
+with tab_out:
+    render_outputs_formulas()
