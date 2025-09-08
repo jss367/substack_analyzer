@@ -627,15 +627,18 @@ st.title("Substack Ads ROI Simulator")
 
 # Tabs
 with st.container():
-    tab_sim, tab_est, tab_help, tab_out, tab_import = st.tabs(
+    tab_import, tab_sim, tab_est, tab_out, tab_help = st.tabs(
         [
+            "Data Import",
             "Simulator",
             "Estimators",
-            "Help",
             "Outputs & Formulas",
-            "Data Import",
+            "Help",
         ]
     )
+
+with tab_import:
+    render_data_import()
 
 with tab_sim:
     inputs = sidebar_inputs()
@@ -653,11 +656,8 @@ with tab_sim:
 with tab_est:
     render_estimators()
 
-with tab_help:
-    render_help()
-
 with tab_out:
     render_outputs_formulas()
 
-with tab_import:
-    render_data_import()
+with tab_help:
+    render_help()
