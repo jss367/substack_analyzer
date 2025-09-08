@@ -32,7 +32,7 @@ class AdSpendSchedule:
 class SimulationInputs:
     # Starting state
     starting_free_subscribers: int = 1000
-    starting_premium_subscribers: int = 20
+    starting_premium_subscribers: int = 0
 
     # Horizon
     horizon_months: int = 60
