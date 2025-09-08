@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from contextlib import suppress
 from typing import Optional
 
 import pandas as pd
@@ -370,10 +371,8 @@ Use the Estimators tab to compute these, then plug them into the Simulator sideb
 
 def _read_series(file, has_header: bool, date_sel, count_sel) -> pd.Series:
     # Reset pointer in case file was read for preview
-    try:
+    with suppress(Exception):
         file.seek(0)
-    except Exception:
-        pass
 
     if getattr(file, "name", "").lower().endswith((".xlsx", ".xls")):
         df = pd.read_excel(file, header=0 if has_header else None)
@@ -461,7 +460,8 @@ def _compute_estimates(
 def render_data_import() -> None:
     st.subheader("Import Substack exports (time series)")
     st.caption(
-        "Upload two files: All subscribers over time, and Paid subscribers over time. No headers by default: first column is date, second is count."
+        "Upload two files: All subscribers over time, and Paid subscribers over time. "
+        "No headers by default: first column is date, second is count."
     )
 
     c_all, c_paid = st.columns(2)
@@ -567,7 +567,8 @@ def render_data_import() -> None:
                 cols2[2].metric(" ", " ")
 
             st.caption(
-                "Notes: From totals alone we can compute net growth and a conversion proxy (when both series present). Churn and CAC need more detail."
+                "Notes: From totals alone we can compute net growth and a conversion proxy (when both series present). "
+                "Churn and CAC need more detail."
             )
 
             if st.button("Apply estimates to Simulator"):
@@ -686,11 +687,11 @@ with tab_import:
 with tab_sim:
     inputs = sidebar_inputs()
     result = simulate_growth(inputs)
-    df = result.monthly
-    render_kpis(df)
+    sim_df = result.monthly
+    render_kpis(sim_df)
     with st.expander("Monthly details", expanded=False):
-        st.dataframe(df, width="stretch")
-    render_charts(df)
+        st.dataframe(sim_df, width="stretch")
+    render_charts(sim_df)
     st.caption(
         "MVP model: instant conversion of a share of new free subs, small ongoing conversion of existing free base, "
         "and simple net revenue after Substack + Stripe fees."
