@@ -513,6 +513,7 @@ def render_data_import() -> None:
     # Proceed if at least one file is present
     if all_file is not None or paid_file is not None:
         window = st.slider("Estimation window (last N months)", 3, 12, 6, 1)
+        net_only = st.checkbox("Use net-only growth (set churn to 0)", value=True)
         try:
             all_series = None
             paid_series = None
@@ -520,6 +521,22 @@ def render_data_import() -> None:
                 all_series = _read_series(all_file, all_has_header, all_date_sel, all_count_sel)
             if paid_file is not None:
                 paid_series = _read_series(paid_file, paid_has_header, paid_date_sel, paid_count_sel)
+
+            # Preview charts
+            plot_df = pd.DataFrame()
+            if all_series is not None and not all_series.empty:
+                plot_df["All"] = all_series
+            if paid_series is not None and not paid_series.empty:
+                plot_df["Paid"] = paid_series
+            if not plot_df.empty:
+                if "All" in plot_df.columns and "Paid" in plot_df.columns:
+                    plot_df["Free"] = plot_df["All"].astype(float) - plot_df["Paid"].astype(float)
+                st.subheader("Imported series")
+                st.line_chart(plot_df)
+                # Deltas
+                deltas = plot_df.diff()
+                st.subheader("Monthly change (delta)")
+                st.bar_chart(deltas)
 
             estimates = _compute_estimates(all_series, paid_series, window)
 
@@ -535,8 +552,11 @@ def render_data_import() -> None:
             cols2 = st.columns(3)
             if "conv_ongoing" in estimates:
                 cols2[0].metric("Ongoing premium conversion (proxy)", f"{estimates['conv_ongoing']*100:0.3f}%")
-            cols2[1].metric("Free churn (assumed)", f"{estimates['churn_free']*100:0.2f}%")
-            cols2[2].metric("Premium churn (assumed)", f"{estimates['churn_prem']*100:0.2f}%")
+            # Churn values shown (may be zero if net-only)
+            churn_free_val = 0.0 if net_only else float(estimates.get("churn_free", 0.01))
+            churn_prem_val = 0.0 if net_only else float(estimates.get("churn_prem", 0.01))
+            cols2[1].metric("Free churn", f"{churn_free_val*100:0.2f}%")
+            cols2[2].metric("Premium churn", f"{churn_prem_val*100:0.2f}%")
 
             st.caption(
                 "Notes: From totals alone we can compute net growth and a conversion proxy (when both series present). Churn and CAC need more detail."
@@ -545,6 +565,9 @@ def render_data_import() -> None:
             if st.button("Apply estimates to Simulator"):
                 for k, v in estimates.items():
                     st.session_state[k] = v
+                if net_only:
+                    st.session_state["churn_free"] = 0.0
+                    st.session_state["churn_prem"] = 0.0
                 st.session_state["horizon_months"] = max(int(_get_state("horizon_months", 60)), 24)
                 st.success("Applied. Open the Simulator tab to review and run.")
         except Exception as e:
