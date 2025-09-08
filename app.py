@@ -367,130 +367,179 @@ Use the Estimators tab to compute these, then plug them into the Simulator sideb
     )
 
 
-def _read_series(file, date_col: str, count_col: str) -> pd.Series:
-    name = getattr(file, "name", "uploaded")
-    if name.lower().endswith((".xlsx", ".xls")):
-        df = pd.read_excel(file)
+def _read_series(file, has_header: bool, date_sel, count_sel) -> pd.Series:
+    # Reset pointer in case file was read for preview
+    try:
+        file.seek(0)
+    except Exception:
+        pass
+
+    if getattr(file, "name", "").lower().endswith((".xlsx", ".xls")):
+        df = pd.read_excel(file, header=0 if has_header else None)
     else:
-        df = pd.read_csv(file)
-    if date_col not in df.columns or count_col not in df.columns:
-        raise ValueError("Selected columns not found in file")
+        df = pd.read_csv(file, header=0 if has_header else None)
+
+    # Determine column names from selection (index or string)
+    if has_header:
+        date_col = date_sel if isinstance(date_sel, str) else df.columns[int(date_sel)]
+        count_col = count_sel if isinstance(count_sel, str) else df.columns[int(count_sel)]
+    else:
+        date_col = df.columns[int(date_sel)]
+        count_col = df.columns[int(count_sel)]
+
     s = (
         df[[date_col, count_col]]
         .rename(columns={date_col: "date", count_col: "count"})
-        .assign(date=lambda d: pd.to_datetime(d["date"]))
+        .assign(date=lambda d: pd.to_datetime(d["date"], errors="coerce"))
+        .dropna(subset=["date"])  # drop rows with invalid dates
         .sort_values("date")
         .set_index("date")["count"]
     )
-    s = s.astype(float)
+    s = pd.to_numeric(s, errors="coerce").dropna()
     # Resample to month end using last observation
-    s = s.resample("M").last().dropna()
+    if not s.empty:
+        s = s.resample("M").last().dropna()
     return s
 
 
-def _compute_estimates(all_series: pd.Series, paid_series: pd.Series, window_months: int = 6) -> dict:
-    aligned = pd.concat([all_series, paid_series], axis=1, keys=["all", "paid"]).dropna()
-    if aligned.empty:
-        raise ValueError("No overlapping dates between All and Paid series")
-    aligned["free"] = aligned["all"] - aligned["paid"]
+def _compute_estimates(
+    all_series: Optional[pd.Series], paid_series: Optional[pd.Series], window_months: int = 6
+) -> dict:
+    estimates: dict = {}
 
-    # Deltas and rates
-    for col in ["free", "paid"]:
-        aligned[f"{col}_delta"] = aligned[col].diff()
-        aligned[f"{col}_rate"] = aligned[f"{col}_delta"] / aligned[col].shift(1)
-
-    # Observed conversion proxy: net new paid / prior free base
-    aligned["conv_proxy"] = aligned["paid_delta"] / aligned["free"].shift(1)
-
-    tail = aligned.tail(window_months)
-
+    # Helper to median positive
     def _median_positive(s: pd.Series) -> float:
-        s = s.replace([pd.NA, pd.NaT], pd.NA).dropna()
+        s = s.dropna()
         s = s[s > 0]
         return float(s.median()) if not s.empty else 0.0
 
-    net_free_growth_rate = _median_positive(tail["free_rate"])  # net (growth - churn)
-    ongoing_conv_rate = _median_positive(tail["conv_proxy"])  # proxy
+    if all_series is not None and paid_series is not None and not all_series.empty and not paid_series.empty:
+        aligned = pd.concat([all_series, paid_series], axis=1, keys=["all", "paid"]).dropna()
+        if aligned.empty:
+            raise ValueError("No overlapping dates between All and Paid series")
+        aligned["free"] = aligned["all"] - aligned["paid"]
+        for col in ["free", "paid"]:
+            aligned[f"{col}_delta"] = aligned[col].diff()
+            aligned[f"{col}_rate"] = aligned[f"{col}_delta"] / aligned[col].shift(1)
+        aligned["conv_proxy"] = aligned["paid_delta"] / aligned["free"].shift(1)
+        tail = aligned.tail(window_months)
 
-    estimates = {
-        "start_free": int(aligned["free"].iloc[-1]),
-        "start_premium": int(aligned["paid"].iloc[-1]),
-        "organic_growth": max(net_free_growth_rate, 0.0),
-        "conv_ongoing": max(ongoing_conv_rate, 0.0),
-        # Not derivable from totals alone; keep conservative defaults
-        "churn_free": float(_get_state("churn_free", 0.01)),
-        "churn_prem": float(_get_state("churn_prem", 0.01)),
-    }
+        estimates.update(
+            {
+                "start_free": int(aligned["free"].iloc[-1]),
+                "start_premium": int(aligned["paid"].iloc[-1]),
+                "organic_growth": _median_positive(tail["free_rate"]),  # net free growth
+                "conv_ongoing": _median_positive(tail["conv_proxy"]),
+            }
+        )
+    elif all_series is not None and not all_series.empty:
+        # Only total subscribers series; assume premium unchanged (use existing state)
+        total = all_series
+        total_delta = total.diff()
+        total_rate = total_delta / total.shift(1)
+        tail = total_rate.tail(window_months)
+        estimates.update(
+            {
+                "start_free": int(total.iloc[-1] - int(_get_state("start_premium", 0))),
+                "organic_growth": _median_positive(tail),  # net total rate as proxy
+            }
+        )
+    elif paid_series is not None and not paid_series.empty:
+        # Only paid series; we can set starting premium
+        estimates.update({"start_premium": int(paid_series.iloc[-1])})
+
+    # Keep churn defaults if not computed elsewhere (cannot infer from topline series)
+    if "churn_free" not in estimates:
+        estimates["churn_free"] = float(_get_state("churn_free", 0.01))
+    if "churn_prem" not in estimates:
+        estimates["churn_prem"] = float(_get_state("churn_prem", 0.01))
+
     return estimates
 
 
 def render_data_import() -> None:
     st.subheader("Import Substack exports (time series)")
     st.caption(
-        "Upload two files: All subscribers over time, and Paid subscribers over time. Each should have a date column and a subscriber count column."
+        "Upload two files: All subscribers over time, and Paid subscribers over time. No headers by default: first column is date, second is count."
     )
 
     c_all, c_paid = st.columns(2)
+
     with c_all:
         all_file = st.file_uploader("All subscribers file (CSV/XLSX)", type=["csv", "xlsx", "xls"], key="all_file")
-        all_df = None
-        all_date_col: Optional[str] = None
-        all_count_col: Optional[str] = None
+        all_has_header = st.checkbox("All file has header row", value=False, key="all_has_header")
+        all_date_sel: Optional[int] = 0
+        all_count_sel: Optional[int] = 1
         if all_file is not None:
             try:
-                # Peek columns
                 if all_file.name.lower().endswith((".xlsx", ".xls")):
-                    tmp = pd.read_excel(all_file, nrows=5)
+                    tmp = pd.read_excel(all_file, header=0 if all_has_header else None, nrows=5)
                 else:
-                    tmp = pd.read_csv(all_file, nrows=5)
-                all_date_col = st.selectbox("All: date column", list(tmp.columns), key="all_date_col")
-                all_count_col = st.selectbox("All: count column", list(tmp.columns), key="all_count_col")
+                    tmp = pd.read_csv(all_file, header=0 if all_has_header else None, nrows=5)
+                # Reset pointer for later full read
+                all_file.seek(0)
+                ncols = tmp.shape[1]
+                all_date_sel = st.selectbox("All: date column (index)", list(range(ncols)), index=0, key="all_date_sel")
+                all_count_sel = st.selectbox(
+                    "All: count column (index)", list(range(ncols)), index=min(1, ncols - 1), key="all_count_sel"
+                )
             except Exception as e:
-                st.error(f"Could not read file: {e}")
+                st.error(f"Could not read All file: {e}")
                 all_file = None
+
     with c_paid:
         paid_file = st.file_uploader("Paid subscribers file (CSV/XLSX)", type=["csv", "xlsx", "xls"], key="paid_file")
-        paid_date_col: Optional[str] = None
-        paid_count_col: Optional[str] = None
+        paid_has_header = st.checkbox("Paid file has header row", value=False, key="paid_has_header")
+        paid_date_sel: Optional[int] = 0
+        paid_count_sel: Optional[int] = 1
         if paid_file is not None:
             try:
                 if paid_file.name.lower().endswith((".xlsx", ".xls")):
-                    tmp2 = pd.read_excel(paid_file, nrows=5)
+                    tmp2 = pd.read_excel(paid_file, header=0 if paid_has_header else None, nrows=5)
                 else:
-                    tmp2 = pd.read_csv(paid_file, nrows=5)
-                paid_date_col = st.selectbox("Paid: date column", list(tmp2.columns), key="paid_date_col")
-                paid_count_col = st.selectbox("Paid: count column", list(tmp2.columns), key="paid_count_col")
+                    tmp2 = pd.read_csv(paid_file, header=0 if paid_has_header else None, nrows=5)
+                paid_file.seek(0)
+                ncols2 = tmp2.shape[1]
+                paid_date_sel = st.selectbox(
+                    "Paid: date column (index)", list(range(ncols2)), index=0, key="paid_date_sel"
+                )
+                paid_count_sel = st.selectbox(
+                    "Paid: count column (index)", list(range(ncols2)), index=min(1, ncols2 - 1), key="paid_count_sel"
+                )
             except Exception as e:
-                st.error(f"Could not read file: {e}")
+                st.error(f"Could not read Paid file: {e}")
                 paid_file = None
 
-    if (
-        all_file is not None
-        and paid_file is not None
-        and all_date_col
-        and all_count_col
-        and paid_date_col
-        and paid_count_col
-    ):
+    # Proceed if at least one file is present
+    if all_file is not None or paid_file is not None:
         window = st.slider("Estimation window (last N months)", 3, 12, 6, 1)
         try:
-            all_series = _read_series(all_file, all_date_col, all_count_col)
-            paid_series = _read_series(paid_file, paid_date_col, paid_count_col)
+            all_series = None
+            paid_series = None
+            if all_file is not None:
+                all_series = _read_series(all_file, all_has_header, all_date_sel, all_count_sel)
+            if paid_file is not None:
+                paid_series = _read_series(paid_file, paid_has_header, paid_date_sel, paid_count_sel)
+
             estimates = _compute_estimates(all_series, paid_series, window)
 
-            st.success("Estimates computed from your series (net rates where applicable)")
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Starting free (latest)", f"{estimates['start_free']:,}")
-            m2.metric("Starting premium (latest)", f"{estimates['start_premium']:,}")
-            m3.metric("Net free growth (monthly)", f"{estimates['organic_growth']*100:0.2f}%")
+            # Display whatever we computed
+            cols = st.columns(3)
+            if "start_free" in estimates:
+                cols[0].metric("Starting free (latest)", f"{estimates['start_free']:,}")
+            if "start_premium" in estimates:
+                cols[1].metric("Starting premium (latest)", f"{estimates['start_premium']:,}")
+            if "organic_growth" in estimates:
+                cols[2].metric("Net free growth (monthly)", f"{estimates['organic_growth']*100:0.2f}%")
 
-            m4, m5, m6 = st.columns(3)
-            m4.metric("Ongoing premium conversion (proxy)", f"{estimates['conv_ongoing']*100:0.3f}%")
-            m5.metric("Free churn (assumed)", f"{estimates['churn_free']*100:0.2f}%")
-            m6.metric("Premium churn (assumed)", f"{estimates['churn_prem']*100:0.2f}%")
+            cols2 = st.columns(3)
+            if "conv_ongoing" in estimates:
+                cols2[0].metric("Ongoing premium conversion (proxy)", f"{estimates['conv_ongoing']*100:0.3f}%")
+            cols2[1].metric("Free churn (assumed)", f"{estimates['churn_free']*100:0.2f}%")
+            cols2[2].metric("Premium churn (assumed)", f"{estimates['churn_prem']*100:0.2f}%")
 
             st.caption(
-                "Notes: From totals alone we can only compute net growth and a conversion proxy. Churn and CAC require additional data."
+                "Notes: From totals alone we can compute net growth and a conversion proxy (when both series present). Churn and CAC need more detail."
             )
 
             if st.button("Apply estimates to Simulator"):
