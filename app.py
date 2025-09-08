@@ -5,6 +5,7 @@ from typing import Optional
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 from substack_analyzer.model import AdSpendSchedule, SimulationInputs, simulate_growth
 
@@ -583,7 +584,10 @@ def render_data_import() -> None:
                 # Set immediate conversion to 0 unless user overrides
                 st.session_state["conv_new"] = 0.0
                 st.session_state["horizon_months"] = max(int(_get_state("horizon_months", 60)), 24)
-                st.success("Applied. Open the Simulator tab to review and run.")
+                # Set switch flag and rerun to trigger tab switch
+                st.session_state["switch_to_sim"] = True
+                st.success("Applied. Switching to Simulator…")
+                st.rerun()
         except Exception as e:
             st.error(f"Estimation failed: {e}")
 
@@ -698,3 +702,18 @@ with tab_out:
 
 with tab_help:
     render_help()
+
+# If requested, auto-switch to the Simulator tab by simulating a click
+if st.session_state.get("switch_to_sim"):
+    components.html(
+        """
+        <script>
+        const tabs = parent.document.querySelectorAll('button[role="tab"]');
+        for (const t of tabs) {
+            if (t.innerText.trim() === 'Simulator') { t.click(); break; }
+        }
+        </script>
+        """,
+        height=0,
+    )
+    st.session_state["switch_to_sim"] = False
