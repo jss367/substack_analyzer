@@ -62,7 +62,7 @@ def sidebar_inputs() -> SimulationInputs:
             "Monthly churn (free)",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("churn_free", 0.01)),
+            value=float(_get_state("churn_free", 0.0)),
             step=0.001,
             format="%0.3f",
             key="churn_free",
@@ -71,7 +71,7 @@ def sidebar_inputs() -> SimulationInputs:
             "Monthly churn (premium)",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("churn_prem", 0.01)),
+            value=float(_get_state("churn_prem", 0.0)),
             step=0.001,
             format="%0.3f",
             key="churn_prem",
@@ -82,7 +82,7 @@ def sidebar_inputs() -> SimulationInputs:
             "New-subscriber premium conversion",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("conv_new", 0.02)),
+            value=float(_get_state("conv_new", 0.0)),
             step=0.001,
             format="%0.3f",
             key="conv_new",
@@ -91,7 +91,7 @@ def sidebar_inputs() -> SimulationInputs:
             "Ongoing premium conversion of existing free",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("conv_ongoing", 0.0003)),
+            value=float(_get_state("conv_ongoing", 0.0)),
             step=0.0001,
             format="%0.4f",
             key="conv_ongoing",
@@ -101,22 +101,22 @@ def sidebar_inputs() -> SimulationInputs:
         spend_mode = st.selectbox(
             "Ad spend schedule",
             ["Two-stage (Years 1-2 / 3-5)", "Constant"],
-            index=int(_get_state("spend_mode_index", 0)),
+            index=int(_get_state("spend_mode_index", 1)),
             key="spend_mode",
         )
         if spend_mode.startswith("Two-stage"):
             stage1 = st.number_input(
                 "Monthly ad spend (years 1-2)",
                 min_value=0.0,
-                value=float(_get_state("ad_stage1", 3000.0)),
-                step=100.0,
+                value=float(_get_state("ad_stage1", 0.0)),
+                step=50.0,
                 key="ad_stage1",
             )
             stage2 = st.number_input(
                 "Monthly ad spend (years 3-5)",
                 min_value=0.0,
-                value=float(_get_state("ad_stage2", 1000.0)),
-                step=100.0,
+                value=float(_get_state("ad_stage2", 0.0)),
+                step=50.0,
                 key="ad_stage2",
             )
             ad_schedule = AdSpendSchedule.two_stage(stage1, stage2)
@@ -125,8 +125,8 @@ def sidebar_inputs() -> SimulationInputs:
             const_spend = st.number_input(
                 "Monthly ad spend (constant)",
                 min_value=0.0,
-                value=float(_get_state("ad_const", 3000.0)),
-                step=100.0,
+                value=float(_get_state("ad_const", 0.0)),
+                step=50.0,
                 key="ad_const",
             )
             ad_schedule = AdSpendSchedule.constant(const_spend)
@@ -142,7 +142,7 @@ def sidebar_inputs() -> SimulationInputs:
         ad_manager_fee = st.number_input(
             "Ad manager monthly fee",
             min_value=0.0,
-            value=float(_get_state("ad_manager_fee", 1500.0)),
+            value=float(_get_state("ad_manager_fee", 0.0)),
             step=50.0,
             key="ad_manager_fee",
         )
@@ -513,6 +513,7 @@ def render_data_import() -> None:
     # Proceed if at least one file is present
     if all_file is not None or paid_file is not None:
         window = st.slider("Estimation window (last N months)", 3, 12, 6, 1)
+        st.caption("This window recomputes trailing medians for the estimates below. It is not a forecast.")
         net_only = st.checkbox("Use net-only growth (set churn to 0)", value=True)
         try:
             all_series = None
@@ -537,6 +538,9 @@ def render_data_import() -> None:
                 deltas = plot_df.diff()
                 st.subheader("Monthly change (delta)")
                 st.bar_chart(deltas)
+                # Tail-only view
+                st.subheader(f"Last {window} months (tail)")
+                st.line_chart(plot_df.tail(window))
 
             estimates = _compute_estimates(all_series, paid_series, window)
 
@@ -552,22 +556,32 @@ def render_data_import() -> None:
             cols2 = st.columns(3)
             if "conv_ongoing" in estimates:
                 cols2[0].metric("Ongoing premium conversion (proxy)", f"{estimates['conv_ongoing']*100:0.3f}%")
-            # Churn values shown (may be zero if net-only)
-            churn_free_val = 0.0 if net_only else float(estimates.get("churn_free", 0.01))
-            churn_prem_val = 0.0 if net_only else float(estimates.get("churn_prem", 0.01))
-            cols2[1].metric("Free churn", f"{churn_free_val*100:0.2f}%")
-            cols2[2].metric("Premium churn", f"{churn_prem_val*100:0.2f}%")
+            if not net_only:
+                cols2[1].metric("Free churn", f"{float(estimates.get('churn_free', 0.0))*100:0.2f}%")
+                cols2[2].metric("Premium churn", f"{float(estimates.get('churn_prem', 0.0))*100:0.2f}%")
+            else:
+                cols2[1].metric("Net-only mode", "Churn ignored")
+                cols2[2].metric(" ", " ")
 
             st.caption(
                 "Notes: From totals alone we can compute net growth and a conversion proxy (when both series present). Churn and CAC need more detail."
             )
 
             if st.button("Apply estimates to Simulator"):
+                # Apply core estimates
                 for k, v in estimates.items():
                     st.session_state[k] = v
+                # Net-only churn handling
                 if net_only:
                     st.session_state["churn_free"] = 0.0
                     st.session_state["churn_prem"] = 0.0
+                # Zero ad spend by default to avoid inflated projections
+                st.session_state["ad_stage1"] = 0.0
+                st.session_state["ad_stage2"] = 0.0
+                st.session_state["ad_const"] = 0.0
+                st.session_state["spend_mode_index"] = 1  # Constant
+                # Set immediate conversion to 0 unless user overrides
+                st.session_state["conv_new"] = 0.0
                 st.session_state["horizon_months"] = max(int(_get_state("horizon_months", 60)), 24)
                 st.success("Applied. Open the Simulator tab to review and run.")
         except Exception as e:
