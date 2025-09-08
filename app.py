@@ -27,7 +27,7 @@ def sidebar_inputs() -> SimulationInputs:
         start_free = st.number_input(
             "Starting free subscribers",
             min_value=0,
-            value=int(_get_state("start_free", 1000)),
+            value=int(_get_state("start_free", 0)),
             step=10,
             key="start_free",
         )
