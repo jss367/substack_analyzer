@@ -31,7 +31,7 @@ class AdSpendSchedule:
 @dataclass(frozen=True)
 class SimulationInputs:
     # Starting state
-    starting_free_subscribers: int = 1000
+    starting_free_subscribers: int = 0
     starting_premium_subscribers: int = 0
 
     # Horizon
