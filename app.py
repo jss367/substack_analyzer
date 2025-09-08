@@ -34,7 +34,7 @@ def sidebar_inputs() -> SimulationInputs:
         start_premium = st.number_input(
             "Starting premium subscribers",
             min_value=0,
-            value=int(_get_state("start_premium", 30)),
+            value=int(_get_state("start_premium", 0)),
             step=1,
             key="start_premium",
         )
