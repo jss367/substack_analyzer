@@ -513,8 +513,8 @@ def render_data_import() -> None:
 
     # Proceed if at least one file is present
     if all_file is not None or paid_file is not None:
-        window = st.slider("Estimation window (last N months)", 3, 12, 6, 1)
-        st.caption("This window recomputes trailing medians for the estimates below. It is not a forecast.")
+        # We'll show the window slider near the tail chart it affects
+        window = int(_get_state("est_window", 6))
         net_only = st.checkbox("Use net-only growth (set churn to 0)", value=True)
         try:
             all_series = None
@@ -539,7 +539,9 @@ def render_data_import() -> None:
                 deltas = plot_df.diff()
                 st.subheader("Monthly change (delta)")
                 st.bar_chart(deltas)
-                # Tail-only view
+                # Tail-only view with window slider placed here
+                window = st.slider("Estimation window (last N months)", 3, 12, window, 1, key="est_window")
+                st.caption("This window recomputes trailing medians for the estimates and the tail chart below.")
                 st.subheader(f"Last {window} months (tail)")
                 st.line_chart(plot_df.tail(window))
 
@@ -561,7 +563,7 @@ def render_data_import() -> None:
                 cols2[1].metric("Free churn", f"{float(estimates.get('churn_free', 0.0))*100:0.2f}%")
                 cols2[2].metric("Premium churn", f"{float(estimates.get('churn_prem', 0.0))*100:0.2f}%")
             else:
-                cols2[1].metric("Net-only mode", "Churn ignored")
+                cols2[1].metric("Net growth (includes churn)", "—")
                 cols2[2].metric(" ", " ")
 
             st.caption(
