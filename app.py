@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from typing import Optional
 
 import pandas as pd
 import streamlit as st
@@ -14,64 +15,186 @@ def format_currency(value: float) -> str:
     return f"${value:,.0f}"
 
 
+def _get_state(key: str, default):
+    return st.session_state.get(key, default)
+
+
 def sidebar_inputs() -> SimulationInputs:
     st.sidebar.header("Assumptions")
 
     with st.sidebar.expander("Starting point", expanded=True):
-        start_free = st.number_input("Starting free subscribers", min_value=0, value=1000, step=10)
-        start_premium = st.number_input("Starting premium subscribers", min_value=0, value=30, step=1)
+        start_free = st.number_input(
+            "Starting free subscribers",
+            min_value=0,
+            value=int(_get_state("start_free", 1000)),
+            step=10,
+            key="start_free",
+        )
+        start_premium = st.number_input(
+            "Starting premium subscribers",
+            min_value=0,
+            value=int(_get_state("start_premium", 30)),
+            step=1,
+            key="start_premium",
+        )
 
     with st.sidebar.expander("Horizon", expanded=False):
-        horizon = st.slider("Months to simulate", min_value=12, max_value=120, value=60, step=6)
+        horizon = st.slider(
+            "Months to simulate",
+            min_value=12,
+            max_value=120,
+            value=int(_get_state("horizon_months", 60)),
+            step=6,
+            key="horizon_months",
+        )
 
     with st.sidebar.expander("Growth & churn", expanded=True):
         organic_growth = st.number_input(
-            "Organic monthly growth (free)", min_value=0.0, max_value=1.0, value=0.01, step=0.001, format="%0.3f"
+            "Organic monthly growth (free)",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(_get_state("organic_growth", 0.01)),
+            step=0.001,
+            format="%0.3f",
+            key="organic_growth",
         )
         churn_free = st.number_input(
-            "Monthly churn (free)", min_value=0.0, max_value=1.0, value=0.01, step=0.001, format="%0.3f"
+            "Monthly churn (free)",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(_get_state("churn_free", 0.01)),
+            step=0.001,
+            format="%0.3f",
+            key="churn_free",
         )
         churn_prem = st.number_input(
-            "Monthly churn (premium)", min_value=0.0, max_value=1.0, value=0.01, step=0.001, format="%0.3f"
+            "Monthly churn (premium)",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(_get_state("churn_prem", 0.01)),
+            step=0.001,
+            format="%0.3f",
+            key="churn_prem",
         )
 
     with st.sidebar.expander("Conversions", expanded=True):
         conv_new = st.number_input(
-            "New-subscriber premium conversion", min_value=0.0, max_value=1.0, value=0.02, step=0.001, format="%0.3f"
+            "New-subscriber premium conversion",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(_get_state("conv_new", 0.02)),
+            step=0.001,
+            format="%0.3f",
+            key="conv_new",
         )
         conv_ongoing = st.number_input(
             "Ongoing premium conversion of existing free",
             min_value=0.0,
             max_value=1.0,
-            value=0.0003,
+            value=float(_get_state("conv_ongoing", 0.0003)),
             step=0.0001,
             format="%0.4f",
+            key="conv_ongoing",
         )
 
     with st.sidebar.expander("Acquisition", expanded=True):
-        spend_mode = st.selectbox("Ad spend schedule", ["Two-stage (Years 1-2 / 3-5)", "Constant"], index=0)
+        spend_mode = st.selectbox(
+            "Ad spend schedule",
+            ["Two-stage (Years 1-2 / 3-5)", "Constant"],
+            index=int(_get_state("spend_mode_index", 0)),
+            key="spend_mode",
+        )
         if spend_mode.startswith("Two-stage"):
-            stage1 = st.number_input("Monthly ad spend (years 1-2)", min_value=0.0, value=3000.0, step=100.0)
-            stage2 = st.number_input("Monthly ad spend (years 3-5)", min_value=0.0, value=1000.0, step=100.0)
+            stage1 = st.number_input(
+                "Monthly ad spend (years 1-2)",
+                min_value=0.0,
+                value=float(_get_state("ad_stage1", 3000.0)),
+                step=100.0,
+                key="ad_stage1",
+            )
+            stage2 = st.number_input(
+                "Monthly ad spend (years 3-5)",
+                min_value=0.0,
+                value=float(_get_state("ad_stage2", 1000.0)),
+                step=100.0,
+                key="ad_stage2",
+            )
             ad_schedule = AdSpendSchedule.two_stage(stage1, stage2)
+            st.session_state["spend_mode_index"] = 0
         else:
-            const_spend = st.number_input("Monthly ad spend (constant)", min_value=0.0, value=3000.0, step=100.0)
+            const_spend = st.number_input(
+                "Monthly ad spend (constant)",
+                min_value=0.0,
+                value=float(_get_state("ad_const", 3000.0)),
+                step=100.0,
+                key="ad_const",
+            )
             ad_schedule = AdSpendSchedule.constant(const_spend)
+            st.session_state["spend_mode_index"] = 1
 
-        cac = st.number_input("Cost per new free subscriber (CAC)", min_value=0.01, value=2.0, step=0.1)
-        ad_manager_fee = st.number_input("Ad manager monthly fee", min_value=0.0, value=1500.0, step=50.0)
+        cac = st.number_input(
+            "Cost per new free subscriber (CAC)",
+            min_value=0.01,
+            value=float(_get_state("cac", 2.0)),
+            step=0.1,
+            key="cac",
+        )
+        ad_manager_fee = st.number_input(
+            "Ad manager monthly fee",
+            min_value=0.0,
+            value=float(_get_state("ad_manager_fee", 1500.0)),
+            step=50.0,
+            key="ad_manager_fee",
+        )
 
     with st.sidebar.expander("Pricing & fees", expanded=True):
-        price_monthly = st.number_input("Premium monthly price (gross)", min_value=0.0, value=10.0, step=1.0)
-        price_annual = st.number_input("Premium annual price (gross)", min_value=0.0, value=70.0, step=5.0)
+        price_monthly = st.number_input(
+            "Premium monthly price (gross)",
+            min_value=0.0,
+            value=float(_get_state("price_monthly", 10.0)),
+            step=1.0,
+            key="price_monthly",
+        )
+        price_annual = st.number_input(
+            "Premium annual price (gross)",
+            min_value=0.0,
+            value=float(_get_state("price_annual", 70.0)),
+            step=5.0,
+            key="price_annual",
+        )
         substack_pct = st.number_input(
-            "Substack fee %", min_value=0.0, max_value=1.0, value=0.10, step=0.01, format="%0.2f"
+            "Substack fee %",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(_get_state("substack_pct", 0.10)),
+            step=0.01,
+            format="%0.2f",
+            key="substack_pct",
         )
         stripe_pct = st.number_input(
-            "Stripe % (billing + card)", min_value=0.0, max_value=1.0, value=0.036, step=0.001, format="%0.3f"
+            "Stripe % (billing + card)",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(_get_state("stripe_pct", 0.036)),
+            step=0.001,
+            format="%0.3f",
+            key="stripe_pct",
         )
-        stripe_flat = st.number_input("Stripe flat per transaction", min_value=0.0, value=0.30, step=0.05)
-        annual_share = st.slider("Share of premium on annual plans", min_value=0.0, max_value=1.0, value=0.0, step=0.05)
+        stripe_flat = st.number_input(
+            "Stripe flat per transaction",
+            min_value=0.0,
+            value=float(_get_state("stripe_flat", 0.30)),
+            step=0.05,
+            key="stripe_flat",
+        )
+        annual_share = st.slider(
+            "Share of premium on annual plans",
+            min_value=0.0,
+            max_value=1.0,
+            value=float(_get_state("annual_share", 0.0)),
+            step=0.05,
+            key="annual_share",
+        )
 
     return SimulationInputs(
         starting_free_subscribers=int(start_free),
@@ -244,6 +367,141 @@ Use the Estimators tab to compute these, then plug them into the Simulator sideb
     )
 
 
+def _read_series(file, date_col: str, count_col: str) -> pd.Series:
+    name = getattr(file, "name", "uploaded")
+    if name.lower().endswith((".xlsx", ".xls")):
+        df = pd.read_excel(file)
+    else:
+        df = pd.read_csv(file)
+    if date_col not in df.columns or count_col not in df.columns:
+        raise ValueError("Selected columns not found in file")
+    s = (
+        df[[date_col, count_col]]
+        .rename(columns={date_col: "date", count_col: "count"})
+        .assign(date=lambda d: pd.to_datetime(d["date"]))
+        .sort_values("date")
+        .set_index("date")["count"]
+    )
+    s = s.astype(float)
+    # Resample to month end using last observation
+    s = s.resample("M").last().dropna()
+    return s
+
+
+def _compute_estimates(all_series: pd.Series, paid_series: pd.Series, window_months: int = 6) -> dict:
+    aligned = pd.concat([all_series, paid_series], axis=1, keys=["all", "paid"]).dropna()
+    if aligned.empty:
+        raise ValueError("No overlapping dates between All and Paid series")
+    aligned["free"] = aligned["all"] - aligned["paid"]
+
+    # Deltas and rates
+    for col in ["free", "paid"]:
+        aligned[f"{col}_delta"] = aligned[col].diff()
+        aligned[f"{col}_rate"] = aligned[f"{col}_delta"] / aligned[col].shift(1)
+
+    # Observed conversion proxy: net new paid / prior free base
+    aligned["conv_proxy"] = aligned["paid_delta"] / aligned["free"].shift(1)
+
+    tail = aligned.tail(window_months)
+
+    def _median_positive(s: pd.Series) -> float:
+        s = s.replace([pd.NA, pd.NaT], pd.NA).dropna()
+        s = s[s > 0]
+        return float(s.median()) if not s.empty else 0.0
+
+    net_free_growth_rate = _median_positive(tail["free_rate"])  # net (growth - churn)
+    ongoing_conv_rate = _median_positive(tail["conv_proxy"])  # proxy
+
+    estimates = {
+        "start_free": int(aligned["free"].iloc[-1]),
+        "start_premium": int(aligned["paid"].iloc[-1]),
+        "organic_growth": max(net_free_growth_rate, 0.0),
+        "conv_ongoing": max(ongoing_conv_rate, 0.0),
+        # Not derivable from totals alone; keep conservative defaults
+        "churn_free": float(_get_state("churn_free", 0.01)),
+        "churn_prem": float(_get_state("churn_prem", 0.01)),
+    }
+    return estimates
+
+
+def render_data_import() -> None:
+    st.subheader("Import Substack exports (time series)")
+    st.caption(
+        "Upload two files: All subscribers over time, and Paid subscribers over time. Each should have a date column and a subscriber count column."
+    )
+
+    c_all, c_paid = st.columns(2)
+    with c_all:
+        all_file = st.file_uploader("All subscribers file (CSV/XLSX)", type=["csv", "xlsx", "xls"], key="all_file")
+        all_df = None
+        all_date_col: Optional[str] = None
+        all_count_col: Optional[str] = None
+        if all_file is not None:
+            try:
+                # Peek columns
+                if all_file.name.lower().endswith((".xlsx", ".xls")):
+                    tmp = pd.read_excel(all_file, nrows=5)
+                else:
+                    tmp = pd.read_csv(all_file, nrows=5)
+                all_date_col = st.selectbox("All: date column", list(tmp.columns), key="all_date_col")
+                all_count_col = st.selectbox("All: count column", list(tmp.columns), key="all_count_col")
+            except Exception as e:
+                st.error(f"Could not read file: {e}")
+                all_file = None
+    with c_paid:
+        paid_file = st.file_uploader("Paid subscribers file (CSV/XLSX)", type=["csv", "xlsx", "xls"], key="paid_file")
+        paid_date_col: Optional[str] = None
+        paid_count_col: Optional[str] = None
+        if paid_file is not None:
+            try:
+                if paid_file.name.lower().endswith((".xlsx", ".xls")):
+                    tmp2 = pd.read_excel(paid_file, nrows=5)
+                else:
+                    tmp2 = pd.read_csv(paid_file, nrows=5)
+                paid_date_col = st.selectbox("Paid: date column", list(tmp2.columns), key="paid_date_col")
+                paid_count_col = st.selectbox("Paid: count column", list(tmp2.columns), key="paid_count_col")
+            except Exception as e:
+                st.error(f"Could not read file: {e}")
+                paid_file = None
+
+    if (
+        all_file is not None
+        and paid_file is not None
+        and all_date_col
+        and all_count_col
+        and paid_date_col
+        and paid_count_col
+    ):
+        window = st.slider("Estimation window (last N months)", 3, 12, 6, 1)
+        try:
+            all_series = _read_series(all_file, all_date_col, all_count_col)
+            paid_series = _read_series(paid_file, paid_date_col, paid_count_col)
+            estimates = _compute_estimates(all_series, paid_series, window)
+
+            st.success("Estimates computed from your series (net rates where applicable)")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Starting free (latest)", f"{estimates['start_free']:,}")
+            m2.metric("Starting premium (latest)", f"{estimates['start_premium']:,}")
+            m3.metric("Net free growth (monthly)", f"{estimates['organic_growth']*100:0.2f}%")
+
+            m4, m5, m6 = st.columns(3)
+            m4.metric("Ongoing premium conversion (proxy)", f"{estimates['conv_ongoing']*100:0.3f}%")
+            m5.metric("Free churn (assumed)", f"{estimates['churn_free']*100:0.2f}%")
+            m6.metric("Premium churn (assumed)", f"{estimates['churn_prem']*100:0.2f}%")
+
+            st.caption(
+                "Notes: From totals alone we can only compute net growth and a conversion proxy. Churn and CAC require additional data."
+            )
+
+            if st.button("Apply estimates to Simulator"):
+                for k, v in estimates.items():
+                    st.session_state[k] = v
+                st.session_state["horizon_months"] = max(int(_get_state("horizon_months", 60)), 24)
+                st.success("Applied. Open the Simulator tab to review and run.")
+        except Exception as e:
+            st.error(f"Estimation failed: {e}")
+
+
 def render_outputs_formulas() -> None:
     st.subheader("Outputs and formulas")
 
@@ -320,12 +578,13 @@ st.title("Substack Ads ROI Simulator")
 
 # Tabs
 with st.container():
-    tab_sim, tab_est, tab_help, tab_out = st.tabs(
+    tab_sim, tab_est, tab_help, tab_out, tab_import = st.tabs(
         [
             "Simulator",
             "Estimators",
             "Help",
             "Outputs & Formulas",
+            "Data Import",
         ]
     )
 
@@ -350,3 +609,6 @@ with tab_help:
 
 with tab_out:
     render_outputs_formulas()
+
+with tab_import:
+    render_data_import()

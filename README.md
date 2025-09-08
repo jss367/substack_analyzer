@@ -62,3 +62,8 @@ streamlit run app.py
 - Scenario comparison and sensitivity analysis
 - Cohort-based conversion and churn curves
 - Funnel from traffic by source to free signups to premium
+
+The way to use this is to export your csvs from substack for both paid and full subscribers.
+
+Those spreadsheets have two columns... days and number of subscribers...
+
