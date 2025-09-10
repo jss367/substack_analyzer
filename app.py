@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 from contextlib import suppress
+from pathlib import Path
 from typing import Optional
 
 import pandas as pd
@@ -10,7 +11,65 @@ import streamlit.components.v1 as components
 
 from substack_analyzer.model import AdSpendSchedule, SimulationInputs, simulate_growth
 
-st.set_page_config(page_title="Substack Ads ROI Simulator", layout="wide")
+# Asset paths
+ASSETS_DIR = Path(__file__).parent / "logos"
+LOGO_ICON = ASSETS_DIR / "ROPI_IconDark Green_RGB.png"
+LOGO_FULL = ASSETS_DIR / "RPI_Full logo_Dark Green_RGB.png"
+
+st.set_page_config(
+    page_title="Substack Ads ROI Simulator",
+    layout="wide",
+    page_icon=str(LOGO_ICON) if LOGO_ICON.exists() else (str(LOGO_FULL) if LOGO_FULL.exists() else None),
+)
+
+
+def _inject_brand_styles() -> None:
+    st.markdown(
+        """
+        <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
+        <style>
+        :root {
+            --brand-accent: #B92D24;
+            --brand-green-dark: #5F6E60;
+            --brand-green-light: #A6C4A7;
+            --brand-bg: #FFFCF2;
+            --brand-text: #2C2626;
+        }
+        html, body, .stApp { font-family: Helvetica, Arial, sans-serif; color: var(--brand-text); }
+        .stApp { background-color: var(--brand-bg) !important; }
+        [data-testid="stSidebar"] { background-color: var(--brand-green-light) !important; }
+        [data-testid="stSidebar"] * { color: var(--brand-text); }
+        h1, h2, h3, h4, h5, h6 { font-family: 'Source Serif 4', Georgia, serif; color: var(--brand-green-dark); }
+        a { color: var(--brand-accent); }
+        .stButton>button { background-color: var(--brand-green-dark); color: #fff; border: 0; border-radius: 6px; }
+        .stButton>button:hover { background-color: #4d5a50; }
+        /* Make header transparent to let theme show */
+        .stApp header { background: transparent; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_brand_header() -> None:
+    c1, c2 = st.columns([1, 5])
+    with c1:
+        if LOGO_FULL.exists():
+            st.image(str(LOGO_FULL), use_column_width=True)
+        elif LOGO_ICON.exists():
+            st.image(str(LOGO_ICON), width=96)
+    with c2:
+        st.markdown(
+            "<div style='padding-top:8px;'><h1 style='margin-bottom:0;'>Substack Ads ROI Simulator</h1></div>",
+            unsafe_allow_html=True,
+        )
+    st.divider()
+
+
+# Apply brand styles and sidebar logo once
+_inject_brand_styles()
+if LOGO_FULL.exists() or LOGO_ICON.exists():
+    st.sidebar.image(str(LOGO_FULL if LOGO_FULL.exists() else LOGO_ICON), use_column_width=True)
 
 
 def format_currency(value: float) -> str:
@@ -667,7 +726,7 @@ def render_outputs_formulas() -> None:
     )
 
 
-st.title("Substack Ads ROI Simulator")
+render_brand_header()
 
 # Tabs
 with st.container():

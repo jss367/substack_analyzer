@@ -1,0 +1,10 @@
+Colors:
+Accent red - #B92D24
+Dark green - #5F6E60
+Light Green - #A6C4A7
+Talcolm (our background color) - #FFFCF2
+Charcoal - #2C2626
+
+Google Fonts:
+Source Serif
+Helvetica
