@@ -55,7 +55,7 @@ def render_brand_header() -> None:
     c1, c2 = st.columns([1, 5])
     with c1:
         if LOGO_FULL.exists():
-            st.image(str(LOGO_FULL), use_column_width=True)
+            st.image(str(LOGO_FULL), use_container_width=True)
         elif LOGO_ICON.exists():
             st.image(str(LOGO_ICON), width=96)
     with c2:
@@ -69,7 +69,7 @@ def render_brand_header() -> None:
 # Apply brand styles and sidebar logo once
 _inject_brand_styles()
 if LOGO_FULL.exists() or LOGO_ICON.exists():
-    st.sidebar.image(str(LOGO_FULL if LOGO_FULL.exists() else LOGO_ICON), use_column_width=True)
+    st.sidebar.image(str(LOGO_FULL if LOGO_FULL.exists() else LOGO_ICON), use_container_width=True)
 
 
 def format_currency(value: float) -> str:
