@@ -119,12 +119,58 @@ def _fit_slope_per_month(values: pd.Series) -> float:
 
 
 def detect_change_points(series: pd.Series, max_changes: int = 4) -> list[int]:
+    """Detect change points emphasizing slope changes rather than level shifts.
+
+    Strategy:
+    - Work on the first difference (monthly deltas) and then its difference
+      (acceleration). Large absolute acceleration indicates a slope change.
+    - Pick the top-k local maxima in |acceleration| with a minimum spacing
+      between change points to avoid clustered duplicates.
+    - Return indices relative to the original monthly series.
+    """
     s = series.dropna()
-    if s.shape[0] < 8:
+    n = s.shape[0]
+    if n < 6:
         return []
-    algo = rpt.Binseg(model="rbf").fit(s.to_numpy())
-    indices = algo.predict(n_bkps=max_changes)
-    indices = [i for i in indices if i < s.shape[0]]
+
+    # First and second differences
+    delta = s.diff().dropna()
+    accel = delta.diff().dropna()
+    if accel.empty:
+        return []
+
+    # Score by absolute acceleration
+    score = accel.abs()
+
+    # Identify candidate peaks (greater than neighbors)
+    candidates: list[pd.Timestamp] = []
+    values: list[float] = []
+    accel_vals = score.to_numpy()
+    accel_index = score.index
+    for i in range(1, len(accel_vals) - 1):
+        if accel_vals[i] >= accel_vals[i - 1] and accel_vals[i] >= accel_vals[i + 1]:
+            candidates.append(accel_index[i])
+            values.append(float(accel_vals[i]))
+
+    if not candidates:
+        return []
+
+    # Sort by magnitude descending and enforce min separation (in months)
+    order = sorted(range(len(candidates)), key=lambda k: values[k], reverse=True)
+    min_separation = 2  # months
+    selected_dates: list[pd.Timestamp] = []
+    for idx in order:
+        d = candidates[idx]
+        # Enforce spacing relative to already selected
+        if all(abs(s.index.get_loc(d) - s.index.get_loc(sd)) >= min_separation for sd in selected_dates):
+            selected_dates.append(d)
+        if len(selected_dates) >= max_changes:
+            break
+
+    # Map dates back to series indices
+    indices = [int(s.index.get_loc(d)) for d in sorted(selected_dates)]
+    # Ensure indices are within bounds [1, n-1]
+    indices = [i for i in indices if 0 <= i < n]
     return indices
 
 
@@ -822,7 +868,9 @@ def render_data_import() -> None:
                     except Exception:
                         breakpoints = []
                 if breakpoints:
-                    st.write(f"Detected change indices (on {target_col}): {breakpoints}")
+                    s_idx = plot_df[target_col].dropna().index
+                    dates = [pd.to_datetime(s_idx[i]).date() for i in breakpoints if i < len(s_idx)]
+                    st.write(f"Detected change dates (on {target_col}): {dates}")
                     # Offer to seed events table with detected dates
                     if st.button("Add detected change dates to Events"):
                         try:
