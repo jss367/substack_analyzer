@@ -5,6 +5,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Optional
 
+import altair as alt
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
@@ -593,7 +594,46 @@ def render_data_import() -> None:
                 if "All" in plot_df.columns and "Paid" in plot_df.columns:
                     plot_df["Free"] = plot_df["All"].astype(float) - plot_df["Paid"].astype(float)
                 st.subheader("Imported series")
-                st.line_chart(plot_df)
+                # Dual-axis toggle for visibility when Paid is much smaller
+                use_dual_axis = st.checkbox(
+                    "Use separate right axis for Paid",
+                    value=True,
+                    help="Plots All/Free on left axis and Paid on right axis for readability.",
+                )
+                if use_dual_axis and {"Paid"}.issubset(set(plot_df.columns)):
+                    base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
+                        x=alt.X("date:T", title="Date")
+                    )
+
+                    left = (
+                        base.transform_fold(
+                            [c for c in ["All", "Free"] if c in plot_df.columns],
+                            as_=["Series", "Value"],
+                        )
+                        .mark_line()
+                        .encode(
+                            y=alt.Y("Value:Q", axis=alt.Axis(title="All / Free")),
+                            color=alt.Color("Series:N", scale=alt.Scale(scheme="tableau10")),
+                        )
+                    )
+
+                    right = (
+                        base.transform_fold(["Paid"], as_=["Series", "Value"])
+                        .mark_line(strokeDash=[4, 3])
+                        .encode(
+                            y=alt.Y(
+                                "Value:Q",
+                                axis=alt.Axis(title="Paid", orient="right"),
+                                scale=alt.Scale(zero=True),
+                            ),
+                            color=alt.Color("Series:N", scale=alt.Scale(range=["#DB4437"])),
+                        )
+                    )
+
+                    chart = alt.layer(left, right).resolve_scale(y="independent").properties(height=260)
+                    st.altair_chart(chart, use_container_width=True)
+                else:
+                    st.line_chart(plot_df)
                 # Deltas
                 deltas = plot_df.diff()
                 st.subheader("Monthly change (delta)")
@@ -602,7 +642,34 @@ def render_data_import() -> None:
                 window = st.slider("Estimation window (last N months)", 3, 12, window, 1, key="est_window")
                 st.caption("This window recomputes trailing medians for the estimates and the tail chart below.")
                 st.subheader(f"Last {window} months (tail)")
-                st.line_chart(plot_df.tail(window))
+                tail_df = plot_df.tail(window)
+                if use_dual_axis and {"Paid"}.issubset(set(tail_df.columns)):
+                    base_t = alt.Chart(tail_df.reset_index().rename(columns={"index": "date"})).encode(
+                        x=alt.X("date:T", title="Date")
+                    )
+                    left_t = (
+                        base_t.transform_fold(
+                            [c for c in ["All", "Free"] if c in tail_df.columns],
+                            as_=["Series", "Value"],
+                        )
+                        .mark_line()
+                        .encode(
+                            y=alt.Y("Value:Q", axis=alt.Axis(title="All / Free")),
+                            color=alt.Color("Series:N", scale=alt.Scale(scheme="tableau10")),
+                        )
+                    )
+                    right_t = (
+                        base_t.transform_fold(["Paid"], as_=["Series", "Value"])
+                        .mark_line(strokeDash=[4, 3])
+                        .encode(
+                            y=alt.Y("Value:Q", axis=alt.Axis(title="Paid", orient="right")),
+                            color=alt.Color("Series:N", scale=alt.Scale(range=["#DB4437"])),
+                        )
+                    )
+                    chart_t = alt.layer(left_t, right_t).resolve_scale(y="independent").properties(height=240)
+                    st.altair_chart(chart_t, use_container_width=True)
+                else:
+                    st.line_chart(tail_df)
 
             estimates = _compute_estimates(all_series, paid_series, window)
 
