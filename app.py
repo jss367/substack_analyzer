@@ -855,7 +855,7 @@ def render_data_import() -> None:
                                     )
                                     st.session_state["events_df"] = upd_df
                         except Exception:
-                            st.info("Interactive chart unavailable; falling back to static Altair.")
+                            st.caption("Interactive chart unavailable; showing static Altair.")
                             altair_needed = True
 
                 if altair_needed:
@@ -1032,7 +1032,7 @@ def render_data_import() -> None:
                                 )
                                 st.session_state["events_df"] = upd_df
                 except Exception:
-                    pass
+                    st.caption("Timeline unavailable.")
 
                 # Drag-edit via sliders (workaround for in-chart drag)
                 if not plot_df.empty and not edited.empty:
