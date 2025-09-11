@@ -471,6 +471,26 @@ def render_estimators() -> None:
                 except Exception:
                     st.info("Provide a valid date inside your imported series range.")
 
+    with st.expander("Event ROI (rough)", expanded=False):
+        st.caption("For Ad spend events with a cost, compare pre/post slope and estimate incremental subs.")
+        ev = st.session_state.get("events_df")
+        total_series = st.session_state.get("import_total")
+        if ev is not None and total_series is not None:
+            ev2 = ev.dropna(subset=["date"]) if not ev.empty else ev
+            if ev2 is not None and not ev2.empty:
+                ev2 = ev2.copy()
+                ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                rows = []
+                for _, r in ev2.iterrows():
+                    d = r["date"]
+                    pre, post = slope_around(total_series, d, window=6)
+                    delta = post - pre
+                    cost = float(r.get("cost", 0.0) or 0.0)
+                    rows.append({"date": d, "type": r.get("type", ""), "slope_delta": delta, "cost": cost})
+                if rows:
+                    out = pd.DataFrame(rows)
+                    st.dataframe(out, use_container_width=True)
+
     with st.expander("Acquisition cost (CAC)", expanded=True):
         spend = st.number_input("Ad spend in period", min_value=0.0, value=3000.0, step=50.0)
         paid_new = st.number_input("New free subscribers from ads in period", min_value=0, value=150, step=10)
@@ -750,7 +770,22 @@ def render_data_import() -> None:
                         )
                     )
 
-                    chart = alt.layer(left, right).resolve_scale(y="independent").properties(height=260)
+                    # Overlay event markers if present
+                    layers = [left, right]
+                    if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
+                        ev2 = ev.dropna(subset=["date"]).copy()
+                        if not ev2.empty:
+                            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                            markers = (
+                                alt.Chart(ev2)
+                                .mark_rule(color="#8e44ad")
+                                .encode(
+                                    x="date:T",
+                                    tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
+                                )
+                            )
+                            layers.append(markers)
+                    chart = alt.layer(*layers).resolve_scale(y="independent").properties(height=260)
                     st.altair_chart(chart, use_container_width=True)
                 else:
                     visible_series = ["Total", "Free", "Paid"] if show_total else ["Free", "Paid"]
@@ -762,13 +797,45 @@ def render_data_import() -> None:
                 target_col = "Total" if "Total" in plot_df.columns else ("Free" if "Free" in plot_df.columns else None)
                 breakpoints: list[int] = []
                 if target_col is not None:
-                    max_bkps = st.slider("Max changes to detect", 0, 8, 3, 1, key="max_changes_detect")
+                    max_bkps = st.slider(
+                        "Max changes to detect",
+                        0,
+                        8,
+                        3,
+                        1,
+                        key="max_changes_detect",
+                    )
                     try:
                         breakpoints = detect_change_points(plot_df[target_col], max_changes=max_bkps)
                     except Exception:
                         breakpoints = []
                 if breakpoints:
                     st.write(f"Detected change indices (on {target_col}): {breakpoints}")
+
+                # Events table: add/edit annotations
+                st.subheader("Events & annotations")
+                st.caption("Track shout-outs, ad campaigns, launches, etc. Dates must match the series timeline.")
+                default_events = pd.DataFrame(
+                    [
+                        {"date": None, "type": "Ad spend", "notes": "", "cost": 0.0},
+                    ]
+                )
+                events_df = st.session_state.get("events_df", default_events)
+                edited = st.data_editor(
+                    events_df,
+                    num_rows="dynamic",
+                    column_config={
+                        "date": st.column_config.DateColumn("Date"),
+                        "type": st.column_config.SelectboxColumn(
+                            "Type", options=["Ad spend", "Shout-out", "Other"], width="medium"
+                        ),
+                        "notes": st.column_config.TextColumn("Notes", width="large"),
+                        "cost": st.column_config.NumberColumn("Cost ($)", step=10.0, help="For Ad spend ROI calc"),
+                    },
+                    use_container_width=True,
+                    key="events_editor",
+                )
+                st.session_state["events_df"] = edited
                 # Deltas
                 deltas = plot_df.diff()
                 st.subheader("Monthly change (delta)")
@@ -809,7 +876,21 @@ def render_data_import() -> None:
                             ),
                         )
                     )
-                    chart_t = alt.layer(left_t, right_t).resolve_scale(y="independent").properties(height=240)
+                    layers_t = [left_t, right_t]
+                    if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
+                        ev2 = ev.dropna(subset=["date"]).copy()
+                        if not ev2.empty:
+                            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                            markers_t = (
+                                alt.Chart(ev2)
+                                .mark_rule(color="#8e44ad")
+                                .encode(
+                                    x="date:T",
+                                    tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
+                                )
+                            )
+                            layers_t.append(markers_t)
+                    chart_t = alt.layer(*layers_t).resolve_scale(y="independent").properties(height=240)
                     st.altair_chart(chart_t, use_container_width=True)
                 else:
                     visible_series_t = ["Total", "Free", "Paid"] if show_total else ["Free", "Paid"]
