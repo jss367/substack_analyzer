@@ -81,79 +81,93 @@ def _get_state(key: str, default):
     return st.session_state.get(key, default)
 
 
+def number_input_state(label: str, *, key: str, default_value, **kwargs):
+    kwargs["key"] = key
+    if key not in st.session_state:
+        kwargs["value"] = default_value
+    return st.number_input(label, **kwargs)
+
+
+def slider_state(label: str, *, key: str, default_value, **kwargs):
+    kwargs["key"] = key
+    if key not in st.session_state:
+        kwargs["value"] = default_value
+    return st.slider(label, **kwargs)
+
+
 def sidebar_inputs() -> SimulationInputs:
     st.sidebar.header("Assumptions")
 
     with st.sidebar.expander("Starting point", expanded=True):
-        start_free = st.number_input(
+        start_free = number_input_state(
             "Starting free subscribers",
             min_value=0,
-            value=int(_get_state("start_free", 0)),
+            default_value=int(_get_state("start_free", 0)),
             step=10,
             key="start_free",
         )
-        start_premium = st.number_input(
+        start_premium = number_input_state(
             "Starting premium subscribers",
             min_value=0,
-            value=int(_get_state("start_premium", 0)),
+            default_value=int(_get_state("start_premium", 0)),
             step=1,
             key="start_premium",
         )
 
     with st.sidebar.expander("Horizon", expanded=False):
-        horizon = st.slider(
+        horizon = slider_state(
             "Months to simulate",
             min_value=12,
             max_value=120,
-            value=int(_get_state("horizon_months", 60)),
+            default_value=int(_get_state("horizon_months", 60)),
             step=6,
             key="horizon_months",
         )
 
     with st.sidebar.expander("Growth & churn", expanded=True):
-        organic_growth = st.number_input(
+        organic_growth = number_input_state(
             "Organic monthly growth (free)",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("organic_growth", 0.01)),
+            default_value=float(_get_state("organic_growth", 0.01)),
             step=0.001,
             format="%0.3f",
             key="organic_growth",
         )
-        churn_free = st.number_input(
+        churn_free = number_input_state(
             "Monthly churn (free)",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("churn_free", 0.0)),
+            default_value=float(_get_state("churn_free", 0.0)),
             step=0.001,
             format="%0.3f",
             key="churn_free",
         )
-        churn_prem = st.number_input(
+        churn_prem = number_input_state(
             "Monthly churn (premium)",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("churn_prem", 0.0)),
+            default_value=float(_get_state("churn_prem", 0.0)),
             step=0.001,
             format="%0.3f",
             key="churn_prem",
         )
 
     with st.sidebar.expander("Conversions", expanded=True):
-        conv_new = st.number_input(
+        conv_new = number_input_state(
             "New-subscriber premium conversion",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("conv_new", 0.0)),
+            default_value=float(_get_state("conv_new", 0.0)),
             step=0.001,
             format="%0.3f",
             key="conv_new",
         )
-        conv_ongoing = st.number_input(
+        conv_ongoing = number_input_state(
             "Ongoing premium conversion of existing free",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("conv_ongoing", 0.0)),
+            default_value=float(_get_state("conv_ongoing", 0.0)),
             step=0.0001,
             format="%0.4f",
             key="conv_ongoing",
@@ -167,93 +181,93 @@ def sidebar_inputs() -> SimulationInputs:
             key="spend_mode",
         )
         if spend_mode.startswith("Two-stage"):
-            stage1 = st.number_input(
+            stage1 = number_input_state(
                 "Monthly ad spend (years 1-2)",
                 min_value=0.0,
-                value=float(_get_state("ad_stage1", 0.0)),
+                default_value=float(_get_state("ad_stage1", 0.0)),
                 step=50.0,
                 key="ad_stage1",
             )
-            stage2 = st.number_input(
+            stage2 = number_input_state(
                 "Monthly ad spend (years 3-5)",
                 min_value=0.0,
-                value=float(_get_state("ad_stage2", 0.0)),
+                default_value=float(_get_state("ad_stage2", 0.0)),
                 step=50.0,
                 key="ad_stage2",
             )
             ad_schedule = AdSpendSchedule.two_stage(stage1, stage2)
             st.session_state["spend_mode_index"] = 0
         else:
-            const_spend = st.number_input(
+            const_spend = number_input_state(
                 "Monthly ad spend (constant)",
                 min_value=0.0,
-                value=float(_get_state("ad_const", 0.0)),
+                default_value=float(_get_state("ad_const", 0.0)),
                 step=50.0,
                 key="ad_const",
             )
             ad_schedule = AdSpendSchedule.constant(const_spend)
             st.session_state["spend_mode_index"] = 1
 
-        cac = st.number_input(
+        cac = number_input_state(
             "Cost per new free subscriber (CAC)",
             min_value=0.01,
-            value=float(_get_state("cac", 2.0)),
+            default_value=float(_get_state("cac", 2.0)),
             step=0.1,
             key="cac",
         )
-        ad_manager_fee = st.number_input(
+        ad_manager_fee = number_input_state(
             "Ad manager monthly fee",
             min_value=0.0,
-            value=float(_get_state("ad_manager_fee", 0.0)),
+            default_value=float(_get_state("ad_manager_fee", 0.0)),
             step=50.0,
             key="ad_manager_fee",
         )
 
     with st.sidebar.expander("Pricing & fees", expanded=True):
-        price_monthly = st.number_input(
+        price_monthly = number_input_state(
             "Premium monthly price (gross)",
             min_value=0.0,
-            value=float(_get_state("price_monthly", 10.0)),
+            default_value=float(_get_state("price_monthly", 10.0)),
             step=1.0,
             key="price_monthly",
         )
-        price_annual = st.number_input(
+        price_annual = number_input_state(
             "Premium annual price (gross)",
             min_value=0.0,
-            value=float(_get_state("price_annual", 70.0)),
+            default_value=float(_get_state("price_annual", 70.0)),
             step=5.0,
             key="price_annual",
         )
-        substack_pct = st.number_input(
+        substack_pct = number_input_state(
             "Substack fee %",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("substack_pct", 0.10)),
+            default_value=float(_get_state("substack_pct", 0.10)),
             step=0.01,
             format="%0.2f",
             key="substack_pct",
         )
-        stripe_pct = st.number_input(
+        stripe_pct = number_input_state(
             "Stripe % (billing + card)",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("stripe_pct", 0.036)),
+            default_value=float(_get_state("stripe_pct", 0.036)),
             step=0.001,
             format="%0.3f",
             key="stripe_pct",
         )
-        stripe_flat = st.number_input(
+        stripe_flat = number_input_state(
             "Stripe flat per transaction",
             min_value=0.0,
-            value=float(_get_state("stripe_flat", 0.30)),
+            default_value=float(_get_state("stripe_flat", 0.30)),
             step=0.05,
             key="stripe_flat",
         )
-        annual_share = st.slider(
+        annual_share = slider_state(
             "Share of premium on annual plans",
             min_value=0.0,
             max_value=1.0,
-            value=float(_get_state("annual_share", 0.0)),
+            default_value=float(_get_state("annual_share", 0.0)),
             step=0.05,
             key="annual_share",
         )
