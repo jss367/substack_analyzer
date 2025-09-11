@@ -778,7 +778,7 @@ def render_data_import() -> None:
                             ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
                             markers = (
                                 alt.Chart(ev2)
-                                .mark_rule(color="#8e44ad")
+                                .mark_rule(color="#8e44ad", size=3)
                                 .encode(
                                     x="date:T",
                                     tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
@@ -906,7 +906,7 @@ def render_data_import() -> None:
                             ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
                             markers_t = (
                                 alt.Chart(ev2)
-                                .mark_rule(color="#8e44ad")
+                                .mark_rule(color="#8e44ad", size=3)
                                 .encode(
                                     x="date:T",
                                     tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
