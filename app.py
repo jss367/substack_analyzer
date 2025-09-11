@@ -717,7 +717,7 @@ def render_data_import() -> None:
 
     with c_all:
         all_file = st.file_uploader(
-            "All subscribers file (CSV/XLSX), often downloaded as [blogname]_emails_[date].csv",
+            "All subscribers file (CSV/XLSX, often downloaded as [blogname]_emails_[date].csv)",
             type=["csv", "xlsx", "xls"],
             key="all_file",
         )
@@ -743,7 +743,7 @@ def render_data_import() -> None:
 
     with c_paid:
         paid_file = st.file_uploader(
-            "Paid subscribers file (CSV/XLSX), often downloaded as [blogname]_subscribers_[date].csv",
+            "Paid subscribers file (CSV/XLSX, often downloaded as [blogname]_subscribers_[date].csv)",
             type=["csv", "xlsx", "xls"],
             key="paid_file",
         )
