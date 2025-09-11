@@ -587,19 +587,22 @@ def render_data_import() -> None:
             # Preview charts
             plot_df = pd.DataFrame()
             if all_series is not None and not all_series.empty:
-                plot_df["All"] = all_series
+                plot_df["Total"] = all_series
             if paid_series is not None and not paid_series.empty:
                 plot_df["Paid"] = paid_series
             if not plot_df.empty:
-                if "All" in plot_df.columns and "Paid" in plot_df.columns:
-                    plot_df["Free"] = plot_df["All"].astype(float) - plot_df["Paid"].astype(float)
+                if "Total" in plot_df.columns and "Paid" in plot_df.columns:
+                    plot_df["Free"] = plot_df["Total"].astype(float) - plot_df["Paid"].astype(float)
                 st.subheader("Imported series")
                 # Dual-axis toggle for visibility when Paid is much smaller
                 use_dual_axis = st.checkbox(
                     "Use separate right axis for Paid",
                     value=True,
-                    help="Plots All/Free on left axis and Paid on right axis for readability.",
+                    help="Plots Total/Free on left axis and Paid on right axis for readability.",
                 )
+                # Option to hide/show Total line by default (on when Paid missing)
+                default_show_total = "Paid" not in plot_df.columns
+                show_total = st.checkbox("Show Total line", value=default_show_total)
                 if use_dual_axis and {"Paid"}.issubset(set(plot_df.columns)):
                     base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
                         x=alt.X("date:T", title="Date")
@@ -607,13 +610,17 @@ def render_data_import() -> None:
 
                     left = (
                         base.transform_fold(
-                            [c for c in ["All", "Free"] if c in plot_df.columns],
+                            [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in plot_df.columns],
                             as_=["Series", "Value"],
                         )
                         .mark_line()
                         .encode(
-                            y=alt.Y("Value:Q", axis=alt.Axis(title="All / Free")),
-                            color=alt.Color("Series:N", scale=alt.Scale(scheme="tableau10")),
+                            y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
+                            color=alt.Color(
+                                "Series:N",
+                                scale=alt.Scale(scheme="tableau10"),
+                                title="Series (Paid is dashed)",
+                            ),
                         )
                     )
 
@@ -626,14 +633,20 @@ def render_data_import() -> None:
                                 axis=alt.Axis(title="Paid", orient="right"),
                                 scale=alt.Scale(zero=True),
                             ),
-                            color=alt.Color("Series:N", scale=alt.Scale(range=["#DB4437"])),
+                            color=alt.Color(
+                                "Series:N",
+                                scale=alt.Scale(range=["#DB4437"]),
+                                title="Series (Paid is dashed)",
+                            ),
                         )
                     )
 
                     chart = alt.layer(left, right).resolve_scale(y="independent").properties(height=260)
                     st.altair_chart(chart, use_container_width=True)
                 else:
-                    st.line_chart(plot_df)
+                    visible_series = ["Total", "Free", "Paid"] if show_total else ["Free", "Paid"]
+                    cols_to_plot = [c for c in visible_series if c in plot_df.columns]
+                    st.line_chart(plot_df[cols_to_plot])
                 # Deltas
                 deltas = plot_df.diff()
                 st.subheader("Monthly change (delta)")
@@ -649,13 +662,17 @@ def render_data_import() -> None:
                     )
                     left_t = (
                         base_t.transform_fold(
-                            [c for c in ["All", "Free"] if c in tail_df.columns],
+                            [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in tail_df.columns],
                             as_=["Series", "Value"],
                         )
                         .mark_line()
                         .encode(
-                            y=alt.Y("Value:Q", axis=alt.Axis(title="All / Free")),
-                            color=alt.Color("Series:N", scale=alt.Scale(scheme="tableau10")),
+                            y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
+                            color=alt.Color(
+                                "Series:N",
+                                scale=alt.Scale(scheme="tableau10"),
+                                title="Series (Paid is dashed)",
+                            ),
                         )
                     )
                     right_t = (
@@ -663,13 +680,19 @@ def render_data_import() -> None:
                         .mark_line(strokeDash=[4, 3])
                         .encode(
                             y=alt.Y("Value:Q", axis=alt.Axis(title="Paid", orient="right")),
-                            color=alt.Color("Series:N", scale=alt.Scale(range=["#DB4437"])),
+                            color=alt.Color(
+                                "Series:N",
+                                scale=alt.Scale(range=["#DB4437"]),
+                                title="Series (Paid is dashed)",
+                            ),
                         )
                     )
                     chart_t = alt.layer(left_t, right_t).resolve_scale(y="independent").properties(height=240)
                     st.altair_chart(chart_t, use_container_width=True)
                 else:
-                    st.line_chart(tail_df)
+                    visible_series_t = ["Total", "Free", "Paid"] if show_total else ["Free", "Paid"]
+                    cols_to_plot_t = [c for c in visible_series_t if c in tail_df.columns]
+                    st.line_chart(tail_df[cols_to_plot_t])
 
             estimates = _compute_estimates(all_series, paid_series, window)
 
