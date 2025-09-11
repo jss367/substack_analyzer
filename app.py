@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import math
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 import altair as alt
 import pandas as pd
+import ruptures as rpt
 import streamlit as st
 import streamlit.components.v1 as components
 
@@ -93,6 +95,76 @@ def slider_state(label: str, *, key: str, default_value, **kwargs):
     if key not in st.session_state:
         kwargs["value"] = default_value
     return st.slider(label, **kwargs)
+
+
+@dataclass(frozen=True)
+class SegmentSlope:
+    start_index: int
+    end_index: int
+    start_date: pd.Timestamp
+    end_date: pd.Timestamp
+    slope_per_month: float
+
+
+def _fit_slope_per_month(values: pd.Series) -> float:
+    if len(values) < 2:
+        return 0.0
+    x = pd.RangeIndex(len(values)).to_numpy(dtype=float)
+    y = values.to_numpy(dtype=float)
+    denom = float(((x - x.mean()) ** 2).sum())
+    if denom == 0.0:
+        return 0.0
+    slope = float(((x - x.mean()) * (y - y.mean())).sum() / denom)
+    return slope
+
+
+def detect_change_points(series: pd.Series, max_changes: int = 4) -> list[int]:
+    s = series.dropna()
+    if s.shape[0] < 8:
+        return []
+    algo = rpt.Binseg(model="rbf").fit(s.to_numpy())
+    indices = algo.predict(n_bkps=max_changes)
+    indices = [i for i in indices if i < s.shape[0]]
+    return indices
+
+
+def compute_segment_slopes(series: pd.Series, breakpoints: list[int]) -> list[SegmentSlope]:
+    s = series.dropna()
+    if not breakpoints:
+        breakpoints = [s.shape[0]]
+    segments: list[SegmentSlope] = []
+    start = 0
+    for bp in breakpoints:
+        seg_vals = s.iloc[start:bp]
+        slope = _fit_slope_per_month(seg_vals)
+        segments.append(
+            SegmentSlope(
+                start_index=start,
+                end_index=bp - 1,
+                start_date=s.index[start],
+                end_date=s.index[bp - 1],
+                slope_per_month=float(slope),
+            )
+        )
+        start = bp
+    return segments
+
+
+def slope_around(series: pd.Series, event_date: pd.Timestamp, window: int = 6) -> tuple[float, float]:
+    """Return (pre_slope, post_slope) using +/- window months around event_date."""
+    s = series.dropna()
+    if s.empty:
+        return (0.0, 0.0)
+    # Find closest index at or before event_date
+    idx = s.index.searchsorted(event_date, side="right") - 1
+    idx = max(min(idx, len(s) - 2), 1)
+    start_pre = max(0, idx - window + 1)
+    end_pre = idx + 1
+    start_post = idx + 1
+    end_post = min(len(s), idx + 1 + window)
+    pre = _fit_slope_per_month(s.iloc[start_pre:end_pre])
+    post = _fit_slope_per_month(s.iloc[start_post:end_post])
+    return (float(pre), float(post))
 
 
 def sidebar_inputs() -> SimulationInputs:
@@ -378,6 +450,27 @@ def render_estimators() -> None:
             "Tip: Use Subscribers over time + exports. Count paid-attributed signups to estimate 'new free from ads'."
         )
 
+    with st.expander("Event evaluation (pre/post trend)", expanded=False):
+        st.caption("Add an event date to compare the slope before and after for Total or Free.")
+        target = st.selectbox("Series", ["Total", "Free", "Paid"], index=0)
+        date_str = st.text_input("Event date (YYYY-MM-DD)", value="")
+        if st.session_state.get("sim_df") is not None:
+            # Use imported series when available
+            series_map = {}
+            with suppress(Exception):
+                series_map.update({"Total": st.session_state.get("import_total")})
+                series_map.update({"Paid": st.session_state.get("import_paid")})
+                if series_map.get("Total") is not None and series_map.get("Paid") is not None:
+                    series_map["Free"] = series_map["Total"] - series_map["Paid"]
+            if (s := series_map.get(target)) is not None and date_str:
+                try:
+                    dt = pd.to_datetime(date_str)
+                    pre, post = slope_around(s, dt, window=6)
+                    st.metric("Pre slope (per month)", f"{pre:0.2f}")
+                    st.metric("Post slope (per month)", f"{post:0.2f}")
+                except Exception:
+                    st.info("Provide a valid date inside your imported series range.")
+
     with st.expander("Acquisition cost (CAC)", expanded=True):
         spend = st.number_input("Ad spend in period", min_value=0.0, value=3000.0, step=50.0)
         paid_new = st.number_input("New free subscribers from ads in period", min_value=0, value=150, step=10)
@@ -598,12 +691,14 @@ def render_data_import() -> None:
             if paid_file is not None:
                 paid_series = _read_series(paid_file, paid_has_header, paid_date_sel, paid_count_sel)
 
-            # Preview charts
+            # Preview charts + trend detection
             plot_df = pd.DataFrame()
             if all_series is not None and not all_series.empty:
                 plot_df["Total"] = all_series
+                st.session_state["import_total"] = all_series
             if paid_series is not None and not paid_series.empty:
                 plot_df["Paid"] = paid_series
+                st.session_state["import_paid"] = paid_series
             if not plot_df.empty:
                 if "Total" in plot_df.columns and "Paid" in plot_df.columns:
                     plot_df["Free"] = plot_df["Total"].astype(float) - plot_df["Paid"].astype(float)
@@ -661,6 +756,19 @@ def render_data_import() -> None:
                     visible_series = ["Total", "Free", "Paid"] if show_total else ["Free", "Paid"]
                     cols_to_plot = [c for c in visible_series if c in plot_df.columns]
                     st.line_chart(plot_df[cols_to_plot])
+
+                # Change-point detection (on Total if present, otherwise Free)
+                st.caption("Detected trend changes help annotate what happened (e.g., shout‑outs, ad spend).")
+                target_col = "Total" if "Total" in plot_df.columns else ("Free" if "Free" in plot_df.columns else None)
+                breakpoints: list[int] = []
+                if target_col is not None:
+                    max_bkps = st.slider("Max changes to detect", 0, 8, 3, 1, key="max_changes_detect")
+                    try:
+                        breakpoints = detect_change_points(plot_df[target_col], max_changes=max_bkps)
+                    except Exception:
+                        breakpoints = []
+                if breakpoints:
+                    st.write(f"Detected change indices (on {target_col}): {breakpoints}")
                 # Deltas
                 deltas = plot_df.diff()
                 st.subheader("Monthly change (delta)")
@@ -851,6 +959,7 @@ with tab_sim:
     inputs = sidebar_inputs()
     result = simulate_growth(inputs)
     sim_df = result.monthly
+    st.session_state["sim_df"] = sim_df
     render_kpis(sim_df)
     with st.expander("Monthly details", expanded=False):
         st.dataframe(sim_df, width="stretch")
