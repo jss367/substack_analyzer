@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Draggable Main Chart</title>
+    <script src="https://unpkg.com/@streamlit/component-lib@1.5.0/dist/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <style>
+      body { margin: 0; }
+      #root { width: 100%; height: 100%; }
+      .axis text { fill: #6b7280; font-size: 12px; }
+      .axis path, .axis line { stroke: #e5e7eb; }
+      .line-free { stroke: #1f77b4; fill: none; }
+      .line-paid { stroke: #DB4437; stroke-dasharray: 6 4; fill: none; }
+      .marker { stroke: #8e44ad; stroke-width: 3px; cursor: ew-resize; }
+      .point { fill: #1f77b4; opacity: 0.7; }
+      .bg { fill: transparent; }
+      .legend { font: 12px sans-serif; fill: #6b7280; }
+      .tooltip { position: absolute; pointer-events: none; background: #111; color: #fff; padding: 4px 6px; font-size: 12px; border-radius: 4px; opacity: 0.9; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const root = document.getElementById('root');
+
+      function monthEnd(d){
+        const nd = new Date(d.getFullYear(), d.getMonth()+1, 0);
+        nd.setHours(0,0,0,0);
+        return nd;
+      }
+
+      function render({
+        width=900, height=360, margin={top: 12, right: 48, bottom: 36, left: 48},
+        data=[],
+        useDualAxis=true,
+        events=[]
+      }){
+        root.innerHTML = '';
+        const w = root.clientWidth || width;
+        const innerW = w - margin.left - margin.right;
+        const innerH = height - margin.top - margin.bottom;
+
+        // Prepare data
+        const parsed = data.map(d => ({
+          date: new Date(d.date),
+          free: +d.free,
+          paid: d.paid != null ? +d.paid : null,
+        }));
+
+        const svg = d3.select(root).append('svg').attr('width', w).attr('height', height);
+        const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+
+        const x = d3.scaleTime()
+          .domain(d3.extent(parsed, d => d.date))
+          .range([0, innerW]);
+
+        const yLeft = d3.scaleLinear()
+          .domain([0, d3.max(parsed, d => d.free || 0) * 1.05]).nice()
+          .range([innerH, 0]);
+
+        const yRight = d3.scaleLinear()
+          .domain([0, d3.max(parsed, d => d.paid || 0) * 1.05]).nice()
+          .range([innerH, 0]);
+
+        g.append('g').attr('class','axis').attr('transform', `translate(0,${innerH})`).call(d3.axisBottom(x));
+        g.append('g').attr('class','axis').call(d3.axisLeft(yLeft));
+        if (useDualAxis) g.append('g').attr('class','axis').attr('transform',`translate(${innerW},0)`).call(d3.axisRight(yRight));
+
+        const lineFree = d3.line().x(d => x(d.date)).y(d => yLeft(d.free));
+        const linePaid = d3.line().x(d => x(d.date)).y(d => yRight(d.paid));
+
+        g.append('path').datum(parsed).attr('class','line-free').attr('d', lineFree);
+        if (useDualAxis) g.append('path').datum(parsed.filter(d=>d.paid!=null)).attr('class','line-paid').attr('d', linePaid);
+
+        // Points for better tooltip triggers
+        g.selectAll('.pt-free').data(parsed).enter().append('circle')
+          .attr('class','pt-free point').attr('r',2.5)
+          .attr('cx', d=>x(d.date)).attr('cy', d=>yLeft(d.free));
+        if (useDualAxis) g.selectAll('.pt-paid').data(parsed.filter(d=>d.paid!=null)).enter().append('circle')
+          .attr('class','pt-paid point').attr('r',2.5)
+          .attr('cx', d=>x(d.date)).attr('cy', d=>yRight(d.paid)).style('fill','#DB4437');
+
+        const items = (events || []).map((e,i)=>({ id:i, date:new Date(e.date), raw:e }));
+        const markers = g.selectAll('.marker').data(items, d=>d.id).enter()
+          .append('line').attr('class','marker')
+          .attr('x1', d=>x(d.date)).attr('x2', d=>x(d.date)).attr('y1',0).attr('y2',innerH);
+
+        let dragging = null;
+        svg.on('mousedown', (ev)=>{
+          const [mx] = d3.pointer(ev, g.node());
+          let minDx=Infinity, nearest=null;
+          items.forEach(it=>{ const dx=Math.abs(x(it.date)-mx); if(dx<minDx){minDx=dx; nearest=it;} });
+          if (nearest) dragging = nearest;
+        });
+        svg.on('mousemove', (ev)=>{
+          if (!dragging) return;
+          const [mx] = d3.pointer(ev, g.node());
+          const dt = x.invert(mx);
+          dragging.date = dt;
+          markers.filter(d=>d.id===dragging.id).attr('x1',x(dt)).attr('x2',x(dt));
+        });
+        svg.on('mouseup', ()=>{
+          if (!dragging) return;
+          dragging.date = monthEnd(dragging.date);
+          markers.filter(d=>d.id===dragging.id).attr('x1',x(dragging.date)).attr('x2',x(dragging.date));
+          const payload = items.map(it=>({ ...it.raw, date: it.date.toISOString().slice(0,10) }));
+          Streamlit.setComponentValue(payload);
+          dragging=null;
+        });
+
+        Streamlit.setFrameHeight(height);
+      }
+
+      function onRender(event){
+        const args = event.detail.args || {};
+        render(args);
+        Streamlit.setComponentReady();
+      }
+
+      Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+      Streamlit.setComponentReady();
+      Streamlit.setFrameHeight(380);
+    </script>
+  </body>
+  </html>

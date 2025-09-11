@@ -84,6 +84,21 @@ def _get_state(key: str, default):
     return st.session_state.get(key, default)
 
 
+def _format_date_badges(dates: list[pd.Timestamp | str]) -> str:
+    items: list[str] = []
+    for d in dates:
+        try:
+            dt = pd.to_datetime(d)
+            label = dt.strftime("%b %d, %Y")
+        except Exception:
+            label = str(d)
+        items.append(
+            f"<span style='display:inline-block;margin:2px 6px 2px 0;padding:2px 8px;border-radius:999px;border:1px solid #8e44ad;color:#8e44ad;font-size:12px;'>"  # noqa: E501
+            f"{label}</span>"
+        )
+    return "".join(items)
+
+
 def number_input_state(label: str, *, key: str, default_value, **kwargs):
     kwargs["key"] = key
     if key not in st.session_state:
@@ -780,9 +795,52 @@ def render_data_import() -> None:
                 default_show_total = "Paid" not in plot_df.columns
                 show_total = st.checkbox("Show Total line", value=default_show_total)
                 if use_dual_axis and {"Paid"}.issubset(set(plot_df.columns)):
-                    base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
-                        x=alt.X("date:T", title="Date")
-                    )
+                    # Toggle to use draggable main chart component
+                    use_draggable = st.checkbox("Use draggable main chart", value=True)
+                    if use_draggable:
+                        try:
+                            drag_main = declare_component(
+                                "drag_main",
+                                path=str(Path(__file__).parent / "drag_main"),
+                            )
+                            data_payload = plot_df.reset_index().rename(
+                                columns={"index": "date", "Free": "free", "Paid": "paid"}
+                            )[["date", "free", "paid"]]
+                            events_payload = [
+                                {
+                                    "date": (
+                                        pd.to_datetime(r["date"]).to_period("M").to_timestamp("M")
+                                        if pd.notna(r["date"])
+                                        else pd.to_datetime(plot_df.index.min())
+                                    )
+                                    .date()
+                                    .isoformat(),
+                                    "type": r.get("type", ""),
+                                    "notes": r.get("notes", ""),
+                                    "cost": float(r.get("cost", 0.0) or 0.0),
+                                }
+                                for _, r in st.session_state.get("events_df", pd.DataFrame()).iterrows()
+                            ]
+                            updated = drag_main(
+                                data=data_payload.to_dict(orient="records"),
+                                useDualAxis=True,
+                                events=events_payload,
+                                key="drag_main_component",
+                            )
+                            if updated is not None:
+                                upd_df = pd.DataFrame(updated)
+                                if "date" in upd_df.columns:
+                                    upd_df["date"] = (
+                                        pd.to_datetime(upd_df["date"]).dt.to_period("M").to_timestamp("M").dt.date
+                                    )
+                                    st.session_state["events_df"] = upd_df
+                        except Exception:
+                            st.info("Interactive chart unavailable; falling back to static Altair.")
+
+                    if not use_draggable:
+                        base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
+                            x=alt.X("date:T", title="Date")
+                        )
 
                     left = (
                         base.transform_fold(
@@ -843,9 +901,9 @@ def render_data_import() -> None:
                                 )
                             )
                             layers.append(markers)
-                    # Piecewise fit overlay is added below (after change detection) on the tail chart
-                    chart = alt.layer(*layers).resolve_scale(y="independent").properties(height=260)
-                    st.altair_chart(chart, use_container_width=True)
+                        # Piecewise fit overlay is added below (after change detection) on the tail chart
+                        chart = alt.layer(*layers).resolve_scale(y="independent").properties(height=260)
+                        st.altair_chart(chart, use_container_width=True)
                 else:
                     visible_series = ["Total", "Free", "Paid"] if show_total else ["Free", "Paid"]
                     cols_to_plot = [c for c in visible_series if c in plot_df.columns]
@@ -870,8 +928,10 @@ def render_data_import() -> None:
                         breakpoints = []
                 if breakpoints:
                     s_idx = plot_df[target_col].dropna().index
-                    dates = [pd.to_datetime(s_idx[i]).date() for i in breakpoints if i < len(s_idx)]
-                    st.write(f"Detected change dates (on {target_col}): {dates}")
+                    dates = [pd.to_datetime(s_idx[i]) for i in breakpoints if i < len(s_idx)]
+                    st.markdown("**Detected change dates (on %s):**" % target_col)
+                    st.markdown(_format_date_badges(dates), unsafe_allow_html=True)
+                    st.caption("Tip: To adjust these, use the draggable timeline below (purple bars).")
                     # Offer to seed events table with detected dates
                     if st.button("Add detected change dates to Events"):
                         try:
