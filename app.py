@@ -815,15 +815,24 @@ def render_data_import() -> None:
                             data_payload = plot_df.reset_index().rename(
                                 columns={"index": "date", "Free": "free", "Paid": "paid"}
                             )[["date", "free", "paid"]]
+                            # Convert dates to month-end ISO strings for the JS component
+                            data_payload["date"] = (
+                                pd.to_datetime(data_payload["date"])
+                                .dt.to_period("M")
+                                .to_timestamp("M")
+                                .dt.date.astype(str)
+                            )
                             events_payload = [
                                 {
                                     "date": (
-                                        pd.to_datetime(r["date"]).to_period("M").to_timestamp("M")
+                                        pd.to_datetime(r["date"]).to_period("M").to_timestamp("M").date().isoformat()
                                         if pd.notna(r["date"])
                                         else pd.to_datetime(plot_df.index.min())
-                                    )
-                                    .date()
-                                    .isoformat(),
+                                        .to_period("M")
+                                        .to_timestamp("M")
+                                        .date()
+                                        .isoformat()
+                                    ),
                                     "type": r.get("type", ""),
                                     "notes": r.get("notes", ""),
                                     "cost": float(r.get("cost", 0.0) or 0.0),
