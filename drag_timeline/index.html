@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Drag Timeline Component</title>
+    <script src="https://unpkg.com/@streamlit/component-lib@1.5.0/dist/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+    <style>
+      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+      #root { width: 100%; height: 100%; }
+      .axis text { fill: #6b7280; font-size: 12px; }
+      .axis path, .axis line { stroke: #d1d5db; }
+      .marker { stroke: #8e44ad; stroke-width: 3px; cursor: ew-resize; }
+      .background { fill: #ffffff; }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      const root = document.getElementById('root');
+
+      function render({start, end, events, height=120}) {
+        root.innerHTML = '';
+        const width = root.clientWidth || 700;
+        const margin = {top: 8, right: 8, bottom: 24, left: 8};
+        const innerW = width - margin.left - margin.right;
+        const innerH = height - margin.top - margin.bottom;
+
+        const svg = d3.select(root).append('svg')
+          .attr('width', width)
+          .attr('height', height);
+
+        const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
+        g.append('rect').attr('class','background').attr('x',0).attr('y',0).attr('width',innerW).attr('height',innerH).attr('fill','transparent');
+
+        const x = d3.scaleTime().domain([new Date(start), new Date(end)]).range([0, innerW]);
+        const axis = d3.axisBottom(x).ticks(6);
+        g.append('g').attr('class','axis').attr('transform', `translate(0,${innerH})`).call(axis);
+
+        // Markers data
+        const items = (events || []).map((e, i) => ({ id: i, date: new Date(e.date), raw: e }));
+
+        const markers = g.selectAll('.marker')
+          .data(items, d => d.id)
+          .enter()
+          .append('line')
+          .attr('class','marker')
+          .attr('x1', d => x(d.date))
+          .attr('x2', d => x(d.date))
+          .attr('y1', 0)
+          .attr('y2', innerH);
+
+        let dragging = null;
+
+        function clampDate(dt){
+          const t = Math.min(Math.max(+new Date(start), +dt), +new Date(end));
+          return new Date(t);
+        }
+
+        svg.on('mousedown', (event) => {
+          const [mx] = d3.pointer(event, g.node());
+          // pick nearest marker
+          let minDx = Infinity, nearest = null;
+          items.forEach(it => {
+            const dx = Math.abs(x(it.date) - mx);
+            if (dx < minDx) { minDx = dx; nearest = it; }
+          });
+          if (nearest) dragging = nearest;
+        });
+
+        svg.on('mousemove', (event) => {
+          if (!dragging) return;
+          const [mx] = d3.pointer(event, g.node());
+          const dt = clampDate(x.invert(mx));
+          dragging.date = dt;
+          markers.filter(d => d.id === dragging.id)
+            .attr('x1', x(dt)).attr('x2', x(dt));
+        });
+
+        function monthEnd(d){
+          const nd = new Date(d.getFullYear(), d.getMonth()+1, 0); // last day of month
+          nd.setHours(0,0,0,0);
+          return nd;
+        }
+
+        svg.on('mouseup', () => {
+          if (!dragging) return;
+          // snap to month end and emit
+          dragging.date = monthEnd(dragging.date);
+          markers.filter(d => d.id === dragging.id)
+            .attr('x1', x(dragging.date)).attr('x2', x(dragging.date));
+          const payload = items.map(it => ({...it.raw, date: it.date.toISOString().slice(0,10)}));
+          Streamlit.setComponentValue(payload);
+          dragging = null;
+        });
+      }
+
+      function onRender(event){
+        const data = event.detail.args || {};
+        render(data);
+        Streamlit.setFrameHeight();
+      }
+
+      Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+      Streamlit.setComponentReady();
+      Streamlit.setFrameHeight(140);
+    </script>
+  </body>
+  </html>

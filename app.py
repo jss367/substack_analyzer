@@ -11,6 +11,7 @@ import pandas as pd
 import ruptures as rpt
 import streamlit as st
 import streamlit.components.v1 as components
+from streamlit.components.v1 import declare_component
 
 from substack_analyzer.model import AdSpendSchedule, SimulationInputs, simulate_growth
 
@@ -918,6 +919,67 @@ def render_data_import() -> None:
                     key="events_editor",
                 )
                 st.session_state["events_df"] = edited
+
+                # Draggable timeline component
+                try:
+                    drag_component = declare_component(
+                        "drag_timeline",
+                        path=str(Path(__file__).parent / "drag_timeline"),
+                    )
+                    if not plot_df.empty and not edited.empty:
+                        start_dt = pd.to_datetime(plot_df.index.min()).to_pydatetime()
+                        end_dt = pd.to_datetime(plot_df.index.max()).to_pydatetime()
+                        payload = {
+                            "start": start_dt.isoformat(),
+                            "end": end_dt.isoformat(),
+                            "events": [
+                                {
+                                    "date": (
+                                        pd.to_datetime(r["date"]) if pd.notna(r["date"]) else start_dt
+                                    ).isoformat(),
+                                    "type": r.get("type", ""),
+                                    "notes": r.get("notes", ""),
+                                    "cost": float(r.get("cost", 0.0) or 0.0),
+                                }
+                                for _, r in edited.iterrows()
+                            ],
+                        }
+                        updated = drag_component(**payload, key="drag_timeline")
+                        if updated is not None:
+                            upd_df = pd.DataFrame(updated)
+                            if "date" in upd_df.columns:
+                                upd_df["date"] = (
+                                    pd.to_datetime(upd_df["date"]).dt.to_period("M").to_timestamp("M").dt.date
+                                )
+                                st.session_state["events_df"] = upd_df
+                except Exception:
+                    pass
+
+                # Drag-edit via sliders (workaround for in-chart drag)
+                if not plot_df.empty and not edited.empty:
+                    st.checkbox("Enable drag-edit on timeline", value=False, key="drag_edit_events")
+                    if st.session_state.get("drag_edit_events"):
+                        date_index = plot_df.index
+                        start_dt = pd.to_datetime(date_index.min())
+                        end_dt = pd.to_datetime(date_index.max())
+                        new_rows = edited.copy()
+                        for ridx, row in edited.reset_index(drop=True).iterrows():
+                            current = row.get("date")
+                            try:
+                                current_dt = pd.to_datetime(current) if pd.notna(current) else start_dt
+                            except Exception:
+                                current_dt = start_dt
+                            sel = st.slider(
+                                f"Event {ridx+1} date",
+                                min_value=start_dt,
+                                max_value=end_dt,
+                                value=current_dt,
+                                key=f"event_slider_{ridx}",
+                            )
+                            # Snap to month-end to align with series buckets
+                            snapped = pd.to_datetime(sel).to_period("M").to_timestamp("M").date()
+                            new_rows.at[ridx, "date"] = snapped
+                        st.session_state["events_df"] = new_rows
                 # Deltas
                 deltas = plot_df.diff()
                 st.subheader("Monthly change (delta)")
