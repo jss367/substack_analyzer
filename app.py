@@ -742,7 +742,7 @@ def render_data_import() -> None:
                             [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in plot_df.columns],
                             as_=["Series", "Value"],
                         )
-                        .mark_line()
+                        .mark_line(point=True)
                         .encode(
                             y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
                             color=alt.Color(
@@ -750,12 +750,17 @@ def render_data_import() -> None:
                                 scale=alt.Scale(scheme="tableau10"),
                                 title="Series (Paid is dashed)",
                             ),
+                            tooltip=[
+                                alt.Tooltip("date:T", title="Date"),
+                                alt.Tooltip("Series:N", title="Series"),
+                                alt.Tooltip("Value:Q", title="Value"),
+                            ],
                         )
                     )
 
                     right = (
                         base.transform_fold(["Paid"], as_=["Series", "Value"])
-                        .mark_line(strokeDash=[4, 3])
+                        .mark_line(strokeDash=[4, 3], point=True)
                         .encode(
                             y=alt.Y(
                                 "Value:Q",
@@ -767,11 +772,17 @@ def render_data_import() -> None:
                                 scale=alt.Scale(range=["#DB4437"]),
                                 title="Series (Paid is dashed)",
                             ),
+                            tooltip=[
+                                alt.Tooltip("date:T", title="Date"),
+                                alt.Tooltip("Series:N", title="Series"),
+                                alt.Tooltip("Value:Q", title="Value"),
+                            ],
                         )
                     )
 
                     # Overlay event markers if present
                     layers = [left, right]
+                    # Always try to overlay markers even if Total is hidden
                     if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
                         ev2 = ev.dropna(subset=["date"]).copy()
                         if not ev2.empty:
@@ -877,7 +888,7 @@ def render_data_import() -> None:
                             [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in tail_df.columns],
                             as_=["Series", "Value"],
                         )
-                        .mark_line()
+                        .mark_line(point=True)
                         .encode(
                             y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
                             color=alt.Color(
@@ -885,11 +896,16 @@ def render_data_import() -> None:
                                 scale=alt.Scale(scheme="tableau10"),
                                 title="Series (Paid is dashed)",
                             ),
+                            tooltip=[
+                                alt.Tooltip("date:T", title="Date"),
+                                alt.Tooltip("Series:N", title="Series"),
+                                alt.Tooltip("Value:Q", title="Value"),
+                            ],
                         )
                     )
                     right_t = (
                         base_t.transform_fold(["Paid"], as_=["Series", "Value"])
-                        .mark_line(strokeDash=[4, 3])
+                        .mark_line(strokeDash=[4, 3], point=True)
                         .encode(
                             y=alt.Y("Value:Q", axis=alt.Axis(title="Paid", orient="right")),
                             color=alt.Color(
@@ -897,6 +913,11 @@ def render_data_import() -> None:
                                 scale=alt.Scale(range=["#DB4437"]),
                                 title="Series (Paid is dashed)",
                             ),
+                            tooltip=[
+                                alt.Tooltip("date:T", title="Date"),
+                                alt.Tooltip("Series:N", title="Series"),
+                                alt.Tooltip("Value:Q", title="Value"),
+                            ],
                         )
                     )
                     layers_t = [left_t, right_t]
