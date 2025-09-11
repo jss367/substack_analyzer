@@ -802,7 +802,8 @@ def render_data_import() -> None:
                 # Option to hide/show Total line by default (on when Paid missing)
                 default_show_total = "Paid" not in plot_df.columns
                 show_total = st.checkbox("Show Total line", value=default_show_total)
-                if use_dual_axis and {"Paid"}.issubset(set(plot_df.columns)):
+                altair_needed = True
+                if use_dual_axis:
                     # Toggle to use draggable main chart component
                     use_draggable = st.checkbox("Use draggable main chart", value=True)
                     if use_draggable:
@@ -835,6 +836,8 @@ def render_data_import() -> None:
                                 events=events_payload,
                                 key="drag_main_component",
                             )
+                            # component rendered; don't render Altair unless explicitly disabled
+                            altair_needed = False
                             if updated is not None:
                                 upd_df = pd.DataFrame(updated)
                                 if "date" in upd_df.columns:
@@ -844,11 +847,12 @@ def render_data_import() -> None:
                                     st.session_state["events_df"] = upd_df
                         except Exception:
                             st.info("Interactive chart unavailable; falling back to static Altair.")
+                            altair_needed = True
 
-                    if not use_draggable:
-                        base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
-                            x=alt.X("date:T", title="Date")
-                        )
+                if altair_needed:
+                    base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
+                        x=alt.X("date:T", title="Date")
+                    )
 
                     left = (
                         base.transform_fold(
@@ -895,11 +899,10 @@ def render_data_import() -> None:
 
                     # Overlay event markers if present
                     layers = [left, right]
-                    # Always try to overlay markers even if Total is hidden
                     if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
                         ev2 = ev.dropna(subset=["date"]).copy()
                         if not ev2.empty:
-                            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").to_timestamp("M")
                             markers = (
                                 alt.Chart(ev2)
                                 .mark_rule(color="#8e44ad", size=3)
@@ -909,7 +912,6 @@ def render_data_import() -> None:
                                 )
                             )
                             layers.append(markers)
-                        # Piecewise fit overlay is added below (after change detection) on the tail chart
                         chart = alt.layer(*layers).resolve_scale(y="independent").properties(height=260)
                         st.altair_chart(chart, use_container_width=True)
                 else:
