@@ -785,6 +785,7 @@ def render_data_import() -> None:
                                 )
                             )
                             layers.append(markers)
+                    # Piecewise fit overlay is added below (after change detection) on the tail chart
                     chart = alt.layer(*layers).resolve_scale(y="independent").properties(height=260)
                     st.altair_chart(chart, use_container_width=True)
                 else:
@@ -811,6 +812,28 @@ def render_data_import() -> None:
                         breakpoints = []
                 if breakpoints:
                     st.write(f"Detected change indices (on {target_col}): {breakpoints}")
+                    # Offer to seed events table with detected dates
+                    if st.button("Add detected change dates to Events"):
+                        try:
+                            s_idx = plot_df[target_col].dropna().index
+                            change_dates = [s_idx[i - 1] if i > 0 else s_idx[i] for i in breakpoints]
+                            seeded = pd.DataFrame(
+                                {
+                                    "date": [pd.to_datetime(d).date() for d in change_dates],
+                                    "type": ["Change"] * len(change_dates),
+                                    "notes": [f"Detected change in {target_col}"] * len(change_dates),
+                                    "cost": [0.0] * len(change_dates),
+                                }
+                            )
+                            existing = st.session_state.get("events_df")
+                            if existing is not None and not existing.empty:
+                                merged = pd.concat([existing, seeded], ignore_index=True)
+                            else:
+                                merged = seeded
+                            st.session_state["events_df"] = merged
+                            st.success("Added detected change dates to Events.")
+                        except Exception:
+                            st.info("Could not add detected dates. Try again after loading data.")
 
                 # Events table: add/edit annotations
                 st.subheader("Events & annotations")
@@ -890,6 +913,37 @@ def render_data_import() -> None:
                                 )
                             )
                             layers_t.append(markers_t)
+                    if target_col is not None and breakpoints:
+                        s_t = tail_df[target_col].dropna()
+                        # Convert breakpoints from full series to tail indices if possible
+                        segs_t = []
+                        try:
+                            full_s = plot_df[target_col].dropna()
+                            segs = compute_segment_slopes(full_s, breakpoints)
+                            # Keep segments intersecting the tail range
+                            tail_start = s_t.index[0]
+                            tail_end = s_t.index[-1]
+                            for seg in segs:
+                                if seg.end_date >= tail_start and seg.start_date <= tail_end:
+                                    segs_t.append(seg)
+                        except Exception:
+                            segs_t = []
+                        fit_rows_t = []
+                        for seg in segs_t:
+                            xs = pd.date_range(
+                                max(seg.start_date, s_t.index[0]),
+                                min(seg.end_date, s_t.index[-1]),
+                                freq="M",
+                            )
+                            start_val = (
+                                float(full_s.loc[seg.start_date]) if 'full_s' in locals() else float(s_t.iloc[0])
+                            )
+                            for i, d in enumerate(xs):
+                                fit_rows_t.append({"date": d, "Fit": start_val + seg.slope_per_month * i})
+                        if fit_rows_t:
+                            fit_df_t = pd.DataFrame(fit_rows_t)
+                            fit_t = alt.Chart(fit_df_t).mark_line(color="#7f8c8d").encode(x="date:T", y="Fit:Q")
+                            layers_t.append(fit_t)
                     chart_t = alt.layer(*layers_t).resolve_scale(y="independent").properties(height=240)
                     st.altair_chart(chart_t, use_container_width=True)
                 else:
