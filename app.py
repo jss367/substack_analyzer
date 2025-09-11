@@ -716,7 +716,11 @@ def render_data_import() -> None:
     c_all, c_paid = st.columns(2)
 
     with c_all:
-        all_file = st.file_uploader("All subscribers file (CSV/XLSX)", type=["csv", "xlsx", "xls"], key="all_file")
+        all_file = st.file_uploader(
+            "All subscribers file (CSV/XLSX), often downloaded as [blogname]_emails_[date].csv",
+            type=["csv", "xlsx", "xls"],
+            key="all_file",
+        )
         all_has_header = st.checkbox("All file has header row", value=False, key="all_has_header")
         all_date_sel: Optional[int] = 0
         all_count_sel: Optional[int] = 1
@@ -738,7 +742,11 @@ def render_data_import() -> None:
                 all_file = None
 
     with c_paid:
-        paid_file = st.file_uploader("Paid subscribers file (CSV/XLSX)", type=["csv", "xlsx", "xls"], key="paid_file")
+        paid_file = st.file_uploader(
+            "Paid subscribers file (CSV/XLSX), often downloaded as [blogname]_subscribers_[date].csv",
+            type=["csv", "xlsx", "xls"],
+            key="paid_file",
+        )
         paid_has_header = st.checkbox("Paid file has header row", value=False, key="paid_has_header")
         paid_date_sel: Optional[int] = 0
         paid_count_sel: Optional[int] = 1
