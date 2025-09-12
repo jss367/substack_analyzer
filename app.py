@@ -773,6 +773,7 @@ def render_data_import() -> None:
         # We'll show the window slider near the tail chart it affects
         window = int(_get_state("est_window", 6))
         net_only = st.checkbox("Use net-only growth (set churn to 0)", value=True)
+        debug_mode = st.checkbox("Enable debug logging", value=True, help="Adds console logs and inline diagnostics.")
         try:
             all_series = None
             paid_series = None
@@ -789,6 +790,12 @@ def render_data_import() -> None:
             if paid_series is not None and not paid_series.empty:
                 plot_df["Paid"] = paid_series
                 st.session_state["import_paid"] = paid_series
+            if debug_mode:
+                st.caption(
+                    f"Debug: all_series={'None' if all_series is None else len(all_series)}; "
+                    f"paid_series={'None' if paid_series is None else len(paid_series)}; "
+                    f"plot_df_cols={list(plot_df.columns)}"
+                )
             if not plot_df.empty:
                 if "Total" in plot_df.columns and "Paid" in plot_df.columns:
                     plot_df["Free"] = plot_df["Total"].astype(float) - plot_df["Paid"].astype(float)
@@ -854,7 +861,7 @@ def render_data_import() -> None:
                                 data=data_payload.to_dict(orient="records"),
                                 useDualAxis=True,
                                 events=events_payload,
-                                debug=True,
+                                debug=bool(debug_mode),
                                 key="drag_main_component",
                             )
                             # component rendered; don't render Altair unless explicitly disabled
@@ -1035,7 +1042,7 @@ def render_data_import() -> None:
                                 for _, r in edited.iterrows()
                             ],
                         }
-                        updated = drag_component(**payload, key="drag_timeline")
+                        updated = drag_component(**payload, debug=bool(debug_mode), key="drag_timeline")
                         if updated is not None:
                             upd_df = pd.DataFrame(updated)
                             if "date" in upd_df.columns:

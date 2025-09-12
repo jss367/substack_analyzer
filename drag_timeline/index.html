@@ -18,6 +18,7 @@
   <body>
     <div id="root"></div>
     <script>
+      console.log('[drag_timeline] script loaded');
       const root = document.getElementById('root');
       let DEBUG = false;
       function log(...args){ if (DEBUG) console.log('[drag_timeline]', ...args); }
@@ -117,7 +118,7 @@
       function boot(){
         const S = window.Streamlit;
         if (!S) { setTimeout(boot, 50); return; }
-        log('boot');
+        log('boot'); console.log('[drag_timeline] boot');
         S.events.addEventListener(S.RENDER_EVENT, onRender);
         S.setComponentReady();
         S.setFrameHeight(140);
