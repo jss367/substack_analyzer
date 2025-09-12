@@ -857,6 +857,10 @@ def render_data_import() -> None:
                                 }
                                 for _, r in st.session_state.get("events_df", pd.DataFrame()).iterrows()
                             ]
+                            if debug_mode:
+                                st.caption(
+                                    f"Debug: rendering drag_main with rows={len(data_payload)}; cols={list(data_payload.columns)}"
+                                )
                             updated = drag_main(
                                 data=data_payload.to_dict(orient="records"),
                                 useDualAxis=True,
@@ -873,8 +877,12 @@ def render_data_import() -> None:
                                         pd.to_datetime(upd_df["date"]).dt.to_period("M").to_timestamp("M").dt.date
                                     )
                                     st.session_state["events_df"] = upd_df
-                        except Exception:
+                        except Exception as e:
                             st.caption("Interactive chart unavailable; showing static Altair.")
+                            if debug_mode:
+                                st.exception(e)
+                                with suppress(Exception):
+                                    st.dataframe(data_payload.head(), use_container_width=True)
                             altair_needed = True
 
                 if altair_needed:
