@@ -19,8 +19,14 @@
     <div id="root"></div>
     <script>
       const root = document.getElementById('root');
+      let DEBUG = false;
+      function log(...args){ if (DEBUG) console.log('[drag_timeline]', ...args); }
+      function warn(...args){ if (DEBUG) console.warn('[drag_timeline]', ...args); }
+      function err(...args){ console.error('[drag_timeline]', ...args); }
 
-      function render({start, end, events, height=120}) {
+      function render({start, end, events, height=120, debug=false}) {
+        DEBUG = !!debug;
+        log('render()', { start, end, events_count: (events||[]).length, height });
         root.innerHTML = '';
         const width = root.clientWidth || 700;
         const margin = {top: 8, right: 8, bottom: 24, left: 8};
@@ -91,20 +97,35 @@
           markers.filter(d => d.id === dragging.id)
             .attr('x1', x(dragging.date)).attr('x2', x(dragging.date));
           const payload = items.map(it => ({...it.raw, date: it.date.toISOString().slice(0,10)}));
-          Streamlit.setComponentValue(payload);
+          if (window.Streamlit && typeof window.Streamlit.setComponentValue === 'function') {
+            window.Streamlit.setComponentValue(payload);
+          }
           dragging = null;
         });
       }
 
       function onRender(event){
         const data = event.detail.args || {};
+        DEBUG = !!data.debug;
+        log('onRender', data);
         render(data);
-        Streamlit.setFrameHeight();
+        if (window.Streamlit && typeof window.Streamlit.setFrameHeight === 'function') {
+          window.Streamlit.setFrameHeight();
+        }
       }
 
-      Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
-      Streamlit.setComponentReady();
-      Streamlit.setFrameHeight(140);
+      function boot(){
+        const S = window.Streamlit;
+        if (!S) { setTimeout(boot, 50); return; }
+        log('boot');
+        S.events.addEventListener(S.RENDER_EVENT, onRender);
+        S.setComponentReady();
+        S.setFrameHeight(140);
+      }
+      boot();
+
+      window.addEventListener('error', (e)=>{ err('window error', e?.message || e); });
+      window.addEventListener('unhandledrejection', (e)=>{ err('unhandled rejection', e?.reason || e); });
     </script>
   </body>
   </html>
