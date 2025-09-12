@@ -813,10 +813,7 @@ def render_data_import() -> None:
                 # Option to hide/show Total line by default (on when Paid missing)
                 default_show_total = "Paid" not in plot_df.columns
                 show_total = st.checkbox("Show Total line", value=default_show_total)
-                # draggable main chart removed
-                altair_needed = True
-
-                if altair_needed:
+                # Altair chart
                     base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
                         x=alt.X("date:T", title="Date")
                     )
@@ -842,30 +839,32 @@ def render_data_import() -> None:
                         )
                     )
 
-                    right = (
-                        base.transform_fold(["Paid"], as_=["Series", "Value"])
-                        .mark_line(strokeDash=[4, 3], point=True)
-                        .encode(
-                            y=alt.Y(
-                                "Value:Q",
-                                axis=alt.Axis(title="Paid", orient="right"),
-                                scale=alt.Scale(zero=True),
-                            ),
-                            color=alt.Color(
-                                "Series:N",
-                                scale=alt.Scale(range=["#DB4437"]),
-                                title="Series (Paid is dashed)",
-                            ),
-                            tooltip=[
-                                alt.Tooltip("date:T", title="Date"),
-                                alt.Tooltip("Series:N", title="Series"),
-                                alt.Tooltip("Value:Q", title="Value"),
-                            ],
+                    layers = [left]
+                    if use_dual_axis and ("Paid" in plot_df.columns):
+                        right = (
+                            base.transform_fold(["Paid"], as_=["Series", "Value"])
+                            .mark_line(strokeDash=[4, 3], point=True)
+                            .encode(
+                                y=alt.Y(
+                                    "Value:Q",
+                                    axis=alt.Axis(title="Paid", orient="right"),
+                                    scale=alt.Scale(zero=True),
+                                ),
+                                color=alt.Color(
+                                    "Series:N",
+                                    scale=alt.Scale(range=["#DB4437"]),
+                                    title="Series (Paid is dashed)",
+                                ),
+                                tooltip=[
+                                    alt.Tooltip("date:T", title="Date"),
+                                    alt.Tooltip("Series:N", title="Series"),
+                                    alt.Tooltip("Value:Q", title="Value"),
+                                ],
+                            )
                         )
-                    )
+                        layers.append(right)
 
                     # Overlay event markers if present
-                    layers = [left, right]
                     if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
                         ev2 = ev.dropna(subset=["date"]).copy()
                         if not ev2.empty:
@@ -879,10 +878,11 @@ def render_data_import() -> None:
                                 )
                             )
                             layers.append(markers)
-                        chart = alt.layer(*layers).resolve_scale(y="independent").properties(height=260)
-                        st.altair_chart(chart, use_container_width=True)
-                else:
-                    pass
+                    chart = alt.layer(*layers)
+                    if use_dual_axis and ("Paid" in plot_df.columns):
+                        chart = chart.resolve_scale(y="independent")
+                    chart = chart.properties(height=260)
+                    st.altair_chart(chart, use_container_width=True)
 
                 # Change-point detection (on Total if present, otherwise Free)
                 st.caption("Detected trend changes help annotate what happened (e.g., shout‑outs, ad spend).")
