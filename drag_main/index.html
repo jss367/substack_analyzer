@@ -106,22 +106,33 @@
           dragging.date = monthEnd(dragging.date);
           markers.filter(d=>d.id===dragging.id).attr('x1',x(dragging.date)).attr('x2',x(dragging.date));
           const payload = items.map(it=>({ ...it.raw, date: it.date.toISOString().slice(0,10) }));
-          Streamlit.setComponentValue(payload);
+          if (window.Streamlit && typeof window.Streamlit.setComponentValue === 'function') {
+            window.Streamlit.setComponentValue(payload);
+          }
           dragging=null;
         });
 
-        Streamlit.setFrameHeight(height);
+        if (window.Streamlit && typeof window.Streamlit.setFrameHeight === 'function') {
+          window.Streamlit.setFrameHeight(height);
+        }
       }
 
       function onRender(event){
         const args = event.detail.args || {};
         render(args);
-        Streamlit.setComponentReady();
+        if (window.Streamlit && typeof window.Streamlit.setComponentReady === 'function') {
+          window.Streamlit.setComponentReady();
+        }
       }
 
-      Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
-      Streamlit.setComponentReady();
-      Streamlit.setFrameHeight(380);
+      function boot(){
+        const S = window.Streamlit;
+        if (!S) { setTimeout(boot, 50); return; }
+        S.events.addEventListener(S.RENDER_EVENT, onRender);
+        S.setComponentReady();
+        S.setFrameHeight(380);
+      }
+      boot();
     </script>
   </body>
   </html>
