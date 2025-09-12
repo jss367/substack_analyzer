@@ -961,7 +961,7 @@ def render_data_import() -> None:
                 # Deltas
                 deltas = plot_df.diff()
                 st.subheader("Monthly change (delta)")
-                st.bar_chart(deltas)
+                st.bar_chart(deltas.fillna(0))
                 # Tail-only view with window slider placed here
                 window = st.slider("Estimation window (last N months)", 3, 12, window, 1, key="est_window")
                 st.caption("This window recomputes trailing medians for the estimates and the tail chart below.")
