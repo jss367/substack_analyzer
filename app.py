@@ -812,7 +812,11 @@ def render_data_import() -> None:
                 altair_needed = True
                 if use_dual_axis:
                     # Toggle to use draggable main chart component
-                    use_draggable = st.checkbox("Use draggable main chart", value=True)
+                    use_draggable = st.checkbox(
+                        "Use draggable main chart",
+                        value=False,
+                        help="Experimental; may not load in some hosted environments. Altair chart above is the default.",
+                    )
                     if use_draggable:
                         try:
                             drag_main = declare_component(
@@ -951,9 +955,7 @@ def render_data_import() -> None:
                         chart = alt.layer(*layers).resolve_scale(y="independent").properties(height=260)
                         st.altair_chart(chart, use_container_width=True)
                 else:
-                    visible_series = ["Total", "Free", "Paid"] if show_total else ["Free", "Paid"]
-                    cols_to_plot = [c for c in visible_series if c in plot_df.columns]
-                    st.line_chart(plot_df[cols_to_plot])
+                    pass
 
                 # Change-point detection (on Total if present, otherwise Free)
                 st.caption("Detected trend changes help annotate what happened (e.g., shout‑outs, ad spend).")
