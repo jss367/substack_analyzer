@@ -8,12 +8,16 @@ from typing import Optional
 
 import altair as alt
 import pandas as pd
-import ruptures as rpt
+
+# Note: ruptures was previously used; keep import only if needed elsewhere
+import ruptures as rpt  # noqa: F401
 import streamlit as st
 import streamlit.components.v1 as components
-from streamlit.components.v1 import declare_component
 
 from substack_analyzer.model import AdSpendSchedule, SimulationInputs, simulate_growth
+
+# Drag components removed; no custom component declarations needed
+
 
 # Asset paths
 ASSETS_DIR = Path(__file__).parent / "logos"
@@ -809,85 +813,8 @@ def render_data_import() -> None:
                 # Option to hide/show Total line by default (on when Paid missing)
                 default_show_total = "Paid" not in plot_df.columns
                 show_total = st.checkbox("Show Total line", value=default_show_total)
+                # draggable main chart removed
                 altair_needed = True
-                if use_dual_axis:
-                    # Toggle to use draggable main chart component
-                    use_draggable = st.checkbox(
-                        "Use draggable main chart",
-                        value=False,
-                        help="Experimental; may not load in some hosted environments. Altair chart above is the default.",
-                    )
-                    if use_draggable:
-                        try:
-                            drag_main = declare_component(
-                                "drag_main",
-                                path=str(Path(__file__).parent / "drag_main"),
-                            )
-                            tmp_df = plot_df.reset_index().rename(columns={"index": "date"})
-                            # Prefer Free if present; otherwise use Total so a single uploaded series still renders
-                            if "Free" in tmp_df.columns:
-                                tmp_df["free"] = tmp_df["Free"].astype(float)
-                            elif "Total" in tmp_df.columns:
-                                tmp_df["free"] = tmp_df["Total"].astype(float)
-                            else:
-                                raise ValueError("No series available to render (need Free or Total).")
-                            # Paid may be absent; leave as None so the component hides the paid line
-                            if "Paid" in tmp_df.columns:
-                                tmp_df["paid"] = tmp_df["Paid"].astype(float)
-                            else:
-                                tmp_df["paid"] = None
-                            data_payload = tmp_df[["date", "free", "paid"]]
-                            # Convert dates to month-end ISO strings for the JS component
-                            data_payload["date"] = (
-                                pd.to_datetime(data_payload["date"])
-                                .dt.to_period("M")
-                                .dt.to_timestamp("M")
-                                .dt.date.astype(str)
-                            )
-                            events_payload = [
-                                {
-                                    "date": (
-                                        pd.to_datetime(r["date"]).to_period("M").to_timestamp("M").date().isoformat()
-                                        if pd.notna(r["date"])
-                                        else pd.to_datetime(plot_df.index.min())
-                                        .to_period("M")
-                                        .to_timestamp("M")
-                                        .date()
-                                        .isoformat()
-                                    ),
-                                    "type": r.get("type", ""),
-                                    "notes": r.get("notes", ""),
-                                    "cost": float(r.get("cost", 0.0) or 0.0),
-                                }
-                                for _, r in st.session_state.get("events_df", pd.DataFrame()).iterrows()
-                            ]
-                            if debug_mode:
-                                st.caption(
-                                    f"Debug: rendering drag_main with rows={len(data_payload)}; cols={list(data_payload.columns)}"
-                                )
-                            updated = drag_main(
-                                data=data_payload.to_dict(orient="records"),
-                                useDualAxis=True,
-                                events=events_payload,
-                                debug=bool(debug_mode),
-                                key="drag_main_component",
-                            )
-                            # component rendered; don't render Altair unless explicitly disabled
-                            altair_needed = False
-                            if updated is not None:
-                                upd_df = pd.DataFrame(updated)
-                                if "date" in upd_df.columns:
-                                    upd_df["date"] = (
-                                        pd.to_datetime(upd_df["date"]).dt.to_period("M").dt.to_timestamp("M").dt.date
-                                    )
-                                    st.session_state["events_df"] = upd_df
-                        except Exception as e:
-                            st.caption("Interactive chart unavailable; showing static Altair.")
-                            if debug_mode:
-                                st.exception(e)
-                                with suppress(Exception):
-                                    st.dataframe(data_payload.head(), use_container_width=True)
-                            altair_needed = True
 
                 if altair_needed:
                     base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
@@ -1028,66 +955,9 @@ def render_data_import() -> None:
                 )
                 st.session_state["events_df"] = edited
 
-                # Draggable timeline component
-                try:
-                    drag_component = declare_component(
-                        "drag_timeline",
-                        path=str(Path(__file__).parent / "drag_timeline"),
-                    )
-                    if not plot_df.empty and not edited.empty:
-                        start_dt = pd.to_datetime(plot_df.index.min()).to_pydatetime()
-                        end_dt = pd.to_datetime(plot_df.index.max()).to_pydatetime()
-                        payload = {
-                            "start": start_dt.isoformat(),
-                            "end": end_dt.isoformat(),
-                            "events": [
-                                {
-                                    "date": (
-                                        pd.to_datetime(r["date"]) if pd.notna(r["date"]) else start_dt
-                                    ).isoformat(),
-                                    "type": r.get("type", ""),
-                                    "notes": r.get("notes", ""),
-                                    "cost": float(r.get("cost", 0.0) or 0.0),
-                                }
-                                for _, r in edited.iterrows()
-                            ],
-                        }
-                        updated = drag_component(**payload, debug=bool(debug_mode), key="drag_timeline")
-                        if updated is not None:
-                            upd_df = pd.DataFrame(updated)
-                            if "date" in upd_df.columns:
-                                upd_df["date"] = (
-                                    pd.to_datetime(upd_df["date"]).dt.to_period("M").dt.to_timestamp("M").dt.date
-                                )
-                                st.session_state["events_df"] = upd_df
-                except Exception:
-                    st.caption("Timeline unavailable.")
+                # draggable timeline component removed
 
-                # Drag-edit via sliders (workaround for in-chart drag)
-                if not plot_df.empty and not edited.empty:
-                    st.checkbox("Enable drag-edit on timeline", value=False, key="drag_edit_events")
-                    if st.session_state.get("drag_edit_events"):
-                        date_index = plot_df.index
-                        start_dt = pd.to_datetime(date_index.min())
-                        end_dt = pd.to_datetime(date_index.max())
-                        new_rows = edited.copy()
-                        for ridx, row in edited.reset_index(drop=True).iterrows():
-                            current = row.get("date")
-                            try:
-                                current_dt = pd.to_datetime(current) if pd.notna(current) else start_dt
-                            except Exception:
-                                current_dt = start_dt
-                            sel = st.slider(
-                                f"Event {ridx+1} date",
-                                min_value=start_dt,
-                                max_value=end_dt,
-                                value=current_dt,
-                                key=f"event_slider_{ridx}",
-                            )
-                            # Snap to month-end to align with series buckets
-                            snapped = pd.to_datetime(sel).to_period("M").dt.to_timestamp("M").date()
-                            new_rows.at[ridx, "date"] = snapped
-                        st.session_state["events_df"] = new_rows
+                # drag-edit UI removed
                 # Deltas
                 deltas = plot_df.diff()
                 st.subheader("Monthly change (delta)")
