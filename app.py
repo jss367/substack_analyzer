@@ -837,7 +837,7 @@ def render_data_import() -> None:
                             data_payload["date"] = (
                                 pd.to_datetime(data_payload["date"])
                                 .dt.to_period("M")
-                                .to_timestamp("M")
+                                .dt.to_timestamp("M")
                                 .dt.date.astype(str)
                             )
                             events_payload = [
@@ -874,7 +874,7 @@ def render_data_import() -> None:
                                 upd_df = pd.DataFrame(updated)
                                 if "date" in upd_df.columns:
                                     upd_df["date"] = (
-                                        pd.to_datetime(upd_df["date"]).dt.to_period("M").to_timestamp("M").dt.date
+                                        pd.to_datetime(upd_df["date"]).dt.to_period("M").dt.to_timestamp("M").dt.date
                                     )
                                     st.session_state["events_df"] = upd_df
                         except Exception as e:
@@ -938,7 +938,7 @@ def render_data_import() -> None:
                     if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
                         ev2 = ev.dropna(subset=["date"]).copy()
                         if not ev2.empty:
-                            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").to_timestamp("M")
+                            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
                             markers = (
                                 alt.Chart(ev2)
                                 .mark_rule(color="#8e44ad", size=3)
@@ -1055,7 +1055,7 @@ def render_data_import() -> None:
                             upd_df = pd.DataFrame(updated)
                             if "date" in upd_df.columns:
                                 upd_df["date"] = (
-                                    pd.to_datetime(upd_df["date"]).dt.to_period("M").to_timestamp("M").dt.date
+                                    pd.to_datetime(upd_df["date"]).dt.to_period("M").dt.to_timestamp("M").dt.date
                                 )
                                 st.session_state["events_df"] = upd_df
                 except Exception:
@@ -1083,7 +1083,7 @@ def render_data_import() -> None:
                                 key=f"event_slider_{ridx}",
                             )
                             # Snap to month-end to align with series buckets
-                            snapped = pd.to_datetime(sel).to_period("M").to_timestamp("M").date()
+                            snapped = pd.to_datetime(sel).to_period("M").dt.to_timestamp("M").date()
                             new_rows.at[ridx, "date"] = snapped
                         st.session_state["events_df"] = new_rows
                 # Deltas
