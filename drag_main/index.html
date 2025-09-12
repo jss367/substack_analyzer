@@ -24,6 +24,11 @@
     <div id="root"></div>
     <script>
       const root = document.getElementById('root');
+      let DEBUG = false;
+
+      function log(...args){ if (DEBUG) console.log('[drag_main]', ...args); }
+      function warn(...args){ if (DEBUG) console.warn('[drag_main]', ...args); }
+      function err(...args){ console.error('[drag_main]', ...args); }
 
       function monthEnd(d){
         const nd = new Date(d.getFullYear(), d.getMonth()+1, 0);
@@ -35,19 +40,27 @@
         width=900, height=360, margin={top: 12, right: 48, bottom: 36, left: 48},
         data=[],
         useDualAxis=true,
-        events=[]
+        events=[],
+        debug=false
       }){
+        DEBUG = !!debug;
+        log('render() start', { count: data?.length || 0, events: events?.length || 0, useDualAxis });
         root.innerHTML = '';
         const w = root.clientWidth || width;
         const innerW = w - margin.left - margin.right;
         const innerH = height - margin.top - margin.bottom;
+        log('dims', { w, innerW, innerH, margin });
 
         // Prepare data
-        const parsed = data.map(d => ({
-          date: new Date(d.date),
-          free: +d.free,
-          paid: d.paid != null ? +d.paid : null,
-        }));
+        let parsed = [];
+        try{
+          parsed = (data || []).map(d => ({
+            date: new Date(d.date),
+            free: +d.free,
+            paid: d.paid != null ? +d.paid : null,
+          }));
+        }catch(e){ err('failed to parse data', e); }
+        if (!parsed.length){ warn('no data parsed'); }
 
         const svg = d3.select(root).append('svg').attr('width', w).attr('height', height);
         const g = svg.append('g').attr('transform', `translate(${margin.left},${margin.top})`);
@@ -63,6 +76,7 @@
         const yRight = d3.scaleLinear()
           .domain([0, d3.max(parsed, d => d.paid || 0) * 1.05]).nice()
           .range([innerH, 0]);
+        log('domains', { x: x.domain(), yLeft: yLeft.domain(), yRight: yRight.domain() });
 
         g.append('g').attr('class','axis').attr('transform', `translate(0,${innerH})`).call(d3.axisBottom(x));
         g.append('g').attr('class','axis').call(d3.axisLeft(yLeft));
@@ -119,6 +133,8 @@
 
       function onRender(event){
         const args = event.detail.args || {};
+        DEBUG = !!args.debug;
+        log('onRender', { args });
         render(args);
         if (window.Streamlit && typeof window.Streamlit.setComponentReady === 'function') {
           window.Streamlit.setComponentReady();
@@ -128,11 +144,16 @@
       function boot(){
         const S = window.Streamlit;
         if (!S) { setTimeout(boot, 50); return; }
+        log('boot');
         S.events.addEventListener(S.RENDER_EVENT, onRender);
         S.setComponentReady();
         S.setFrameHeight(380);
       }
       boot();
+
+      // Global error logging for visibility
+      window.addEventListener('error', (e)=>{ err('window error', e?.message || e); });
+      window.addEventListener('unhandledrejection', (e)=>{ err('unhandled rejection', e?.reason || e); });
     </script>
   </body>
   </html>

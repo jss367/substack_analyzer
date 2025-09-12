@@ -854,6 +854,7 @@ def render_data_import() -> None:
                                 data=data_payload.to_dict(orient="records"),
                                 useDualAxis=True,
                                 events=events_payload,
+                                debug=True,
                                 key="drag_main_component",
                             )
                             # component rendered; don't render Altair unless explicitly disabled
