@@ -864,20 +864,20 @@ def render_data_import() -> None:
                     )
                     layers.append(right)
 
-                    # Overlay event markers if present
-                    if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
-                        ev2 = ev.dropna(subset=["date"]).copy()
-                        if not ev2.empty:
-                            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
-                            markers = (
-                                alt.Chart(ev2)
-                                .mark_rule(color="#8e44ad", size=3)
-                                .encode(
-                                    x="date:T",
-                                    tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
-                                )
+                # Overlay event markers on main chart if present
+                if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
+                    ev2 = ev.dropna(subset=["date"]).copy()
+                    if not ev2.empty:
+                        ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                        markers = (
+                            alt.Chart(ev2)
+                            .mark_rule(color="#8e44ad", size=3)
+                            .encode(
+                                x="date:T",
+                                tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
                             )
-                            layers.append(markers)
+                        )
+                        layers.append(markers)
                 chart = alt.layer(*layers)
                 if use_dual_axis and ("Paid" in plot_df.columns):
                     chart = chart.resolve_scale(y="independent")
@@ -967,30 +967,32 @@ def render_data_import() -> None:
                 st.caption("This window recomputes trailing medians for the estimates and the tail chart below.")
                 st.subheader(f"Last {window} months (tail)")
                 tail_df = plot_df.tail(window)
-                if use_dual_axis and {"Paid"}.issubset(set(tail_df.columns)):
-                    base_t = alt.Chart(tail_df.reset_index().rename(columns={"index": "date"})).encode(
-                        x=alt.X("date:T", title="Date")
+                # Tail chart: always use Altair so markers appear regardless of Paid
+                base_t = alt.Chart(tail_df.reset_index().rename(columns={"index": "date"})).encode(
+                    x=alt.X("date:T", title="Date")
+                )
+                left_t = (
+                    base_t.transform_fold(
+                        [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in tail_df.columns],
+                        as_=["Series", "Value"],
                     )
-                    left_t = (
-                        base_t.transform_fold(
-                            [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in tail_df.columns],
-                            as_=["Series", "Value"],
-                        )
-                        .mark_line(point=True)
-                        .encode(
-                            y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
-                            color=alt.Color(
-                                "Series:N",
-                                scale=alt.Scale(scheme="tableau10"),
-                                title="Series (Paid is dashed)",
-                            ),
-                            tooltip=[
-                                alt.Tooltip("date:T", title="Date"),
-                                alt.Tooltip("Series:N", title="Series"),
-                                alt.Tooltip("Value:Q", title="Value"),
-                            ],
-                        )
+                    .mark_line(point=True)
+                    .encode(
+                        y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
+                        color=alt.Color(
+                            "Series:N",
+                            scale=alt.Scale(scheme="tableau10"),
+                            title="Series (Paid is dashed)",
+                        ),
+                        tooltip=[
+                            alt.Tooltip("date:T", title="Date"),
+                            alt.Tooltip("Series:N", title="Series"),
+                            alt.Tooltip("Value:Q", title="Value"),
+                        ],
                     )
+                )
+                layers_t = [left_t]
+                if "Paid" in tail_df.columns and use_dual_axis:
                     right_t = (
                         base_t.transform_fold(["Paid"], as_=["Series", "Value"])
                         .mark_line(strokeDash=[4, 3], point=True)
@@ -1008,57 +1010,52 @@ def render_data_import() -> None:
                             ],
                         )
                     )
-                    layers_t = [left_t, right_t]
-                    if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
-                        ev2 = ev.dropna(subset=["date"]).copy()
-                        if not ev2.empty:
-                            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
-                            markers_t = (
-                                alt.Chart(ev2)
-                                .mark_rule(color="#8e44ad", size=3)
-                                .encode(
-                                    x="date:T",
-                                    tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
-                                )
+                    layers_t.append(right_t)
+                # Markers on tail chart
+                if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
+                    ev2 = ev.dropna(subset=["date"]).copy()
+                    if not ev2.empty:
+                        ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                        markers_t = (
+                            alt.Chart(ev2)
+                            .mark_rule(color="#8e44ad", size=3)
+                            .encode(
+                                x="date:T",
+                                tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
                             )
-                            layers_t.append(markers_t)
-                    if target_col is not None and breakpoints:
-                        s_t = tail_df[target_col].dropna()
-                        # Convert breakpoints from full series to tail indices if possible
+                        )
+                        layers_t.append(markers_t)
+                if target_col is not None and breakpoints:
+                    s_t = tail_df[target_col].dropna()
+                    # Convert breakpoints from full series to tail indices if possible
+                    segs_t = []
+                    try:
+                        full_s = plot_df[target_col].dropna()
+                        segs = compute_segment_slopes(full_s, breakpoints)
+                        # Keep segments intersecting the tail range
+                        tail_start = s_t.index[0]
+                        tail_end = s_t.index[-1]
+                        for seg in segs:
+                            if seg.end_date >= tail_start and seg.start_date <= tail_end:
+                                segs_t.append(seg)
+                    except Exception:
                         segs_t = []
-                        try:
-                            full_s = plot_df[target_col].dropna()
-                            segs = compute_segment_slopes(full_s, breakpoints)
-                            # Keep segments intersecting the tail range
-                            tail_start = s_t.index[0]
-                            tail_end = s_t.index[-1]
-                            for seg in segs:
-                                if seg.end_date >= tail_start and seg.start_date <= tail_end:
-                                    segs_t.append(seg)
-                        except Exception:
-                            segs_t = []
-                        fit_rows_t = []
-                        for seg in segs_t:
-                            xs = pd.date_range(
-                                max(seg.start_date, s_t.index[0]),
-                                min(seg.end_date, s_t.index[-1]),
-                                freq="M",
-                            )
-                            start_val = (
-                                float(full_s.loc[seg.start_date]) if 'full_s' in locals() else float(s_t.iloc[0])
-                            )
-                            for i, d in enumerate(xs):
-                                fit_rows_t.append({"date": d, "Fit": start_val + seg.slope_per_month * i})
-                        if fit_rows_t:
-                            fit_df_t = pd.DataFrame(fit_rows_t)
-                            fit_t = alt.Chart(fit_df_t).mark_line(color="#7f8c8d").encode(x="date:T", y="Fit:Q")
-                            layers_t.append(fit_t)
-                    chart_t = alt.layer(*layers_t).resolve_scale(y="independent").properties(height=240)
-                    st.altair_chart(chart_t, use_container_width=True)
-                else:
-                    visible_series_t = ["Total", "Free", "Paid"] if show_total else ["Free", "Paid"]
-                    cols_to_plot_t = [c for c in visible_series_t if c in tail_df.columns]
-                    st.line_chart(tail_df[cols_to_plot_t])
+                    fit_rows_t = []
+                    for seg in segs_t:
+                        xs = pd.date_range(
+                            max(seg.start_date, s_t.index[0]),
+                            min(seg.end_date, s_t.index[-1]),
+                            freq="M",
+                        )
+                        start_val = float(full_s.loc[seg.start_date]) if 'full_s' in locals() else float(s_t.iloc[0])
+                        for i, d in enumerate(xs):
+                            fit_rows_t.append({"date": d, "Fit": start_val + seg.slope_per_month * i})
+                    if fit_rows_t:
+                        fit_df_t = pd.DataFrame(fit_rows_t)
+                        fit_t = alt.Chart(fit_df_t).mark_line(color="#7f8c8d").encode(x="date:T", y="Fit:Q")
+                        layers_t.append(fit_t)
+                chart_t = alt.layer(*layers_t).resolve_scale(y="independent").properties(height=240)
+                st.altair_chart(chart_t, use_container_width=True)
 
             estimates = _compute_estimates(all_series, paid_series, window)
 
