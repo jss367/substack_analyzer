@@ -812,9 +812,20 @@ def render_data_import() -> None:
                                 "drag_main",
                                 path=str(Path(__file__).parent / "drag_main"),
                             )
-                            data_payload = plot_df.reset_index().rename(
-                                columns={"index": "date", "Free": "free", "Paid": "paid"}
-                            )[["date", "free", "paid"]]
+                            tmp_df = plot_df.reset_index().rename(columns={"index": "date"})
+                            # Prefer Free if present; otherwise use Total so a single uploaded series still renders
+                            if "Free" in tmp_df.columns:
+                                tmp_df["free"] = tmp_df["Free"].astype(float)
+                            elif "Total" in tmp_df.columns:
+                                tmp_df["free"] = tmp_df["Total"].astype(float)
+                            else:
+                                raise ValueError("No series available to render (need Free or Total).")
+                            # Paid may be absent; leave as None so the component hides the paid line
+                            if "Paid" in tmp_df.columns:
+                                tmp_df["paid"] = tmp_df["Paid"].astype(float)
+                            else:
+                                tmp_df["paid"] = None
+                            data_payload = tmp_df[["date", "free", "paid"]]
                             # Convert dates to month-end ISO strings for the JS component
                             data_payload["date"] = (
                                 pd.to_datetime(data_payload["date"])
