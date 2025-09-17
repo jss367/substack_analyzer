@@ -1,28 +1,8 @@
-# substack_analyzer
+# Substack Analyzer
 
-This is available at https://substackanalyzer.streamlit.app/ (just click to wake it up if it's gone to sleep)
+## How to use
 
-## Quick start
-
-1. Create a virtual environment (Python 3.12):
-
-```bash
-cd /Users/julius/git/substack_analyzer
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-2. Install dependencies:
-
-```bash
-pip install -r requirements.txt
-```
-
-3. Run the app:
-
-```bash
-streamlit run app.py
-```
+Open the hosted app: https://substackanalyzer.streamlit.app/ (just click to wake it up if it's gone to sleep)
 
 ## What this does
 
@@ -63,10 +43,4 @@ streamlit run app.py
 - Cohort-based conversion and churn curves
 - Funnel from traffic by source to free signups to premium
 
-The way to use this is to export your csvs from substack for both paid and full subscribers.
-
-Those spreadsheets have two columns... days and number of subscribers...
-
-
-
-This doesn't do seasonality... are there seasonal effects? Is there an end-of-the-year effect?
+See the design document for the end-to-end flow, stage inputs/outputs, and data contracts: [DESIGN.md](./DESIGN.md)
