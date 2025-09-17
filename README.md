@@ -1,6 +1,6 @@
 # substack_analyzer
 
-Substack Ads ROI Simulator (MVP)
+This is available at https://substackanalyzer.streamlit.app/
 
 ## Quick start
 
@@ -66,4 +66,3 @@ streamlit run app.py
 The way to use this is to export your csvs from substack for both paid and full subscribers.
 
 Those spreadsheets have two columns... days and number of subscribers...
-
