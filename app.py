@@ -11,6 +11,7 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+from substack_analyzer.calibration import fit_piecewise_logistic, forecast_piecewise_logistic
 from substack_analyzer.model import AdSpendSchedule, SimulationInputs, simulate_growth
 
 # Asset paths
@@ -953,6 +954,86 @@ def render_data_import() -> None:
                     key="events_editor",
                 )
                 st.session_state["events_df"] = edited
+
+                # Model fitting (piecewise logistic with events)
+                st.subheader("Fit piecewise-logistic model (with events)")
+                st.caption(
+                    "Fits on Total (preferred) or Free if Total is unavailable. "
+                    "Uses detected change points as segments."
+                )
+                horizon_ahead = st.slider("Forecast months ahead", 0, 36, 12, 1)
+                do_fit = st.button("Fit model and overlay")
+                if do_fit:
+                    try:
+                        fit_series_source = plot_df.get("Total") if "Total" in plot_df.columns else plot_df.get("Free")
+                        if fit_series_source is None or fit_series_source.empty:
+                            st.info("Need Total or Free series to fit.")
+                        else:
+                            fit = fit_piecewise_logistic(
+                                total_series=fit_series_source,
+                                breakpoints=breakpoints,
+                                events_df=st.session_state.get("events_df"),
+                            )
+                            st.session_state["pwlog_fit"] = fit
+                            # Overlay fitted curve
+                            overlay_df = pd.DataFrame(
+                                {
+                                    "Actual": fit_series_source,
+                                    "Fitted": fit.fitted_series.reindex(fit_series_source.index),
+                                }
+                            )
+                            base_overlay = alt.Chart(overlay_df.reset_index().rename(columns={"index": "date"})).encode(
+                                x=alt.X("date:T", title="Date")
+                            )
+                            actual_line = (
+                                base_overlay.transform_fold(["Actual"], as_=["Series", "Value"])
+                                .mark_line()
+                                .encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#1f77b4"])))
+                            )
+                            fitted_line = (
+                                base_overlay.transform_fold(["Fitted"], as_=["Series", "Value"])
+                                .mark_line(strokeDash=[5, 3])
+                                .encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#ff7f0e"])))
+                            )
+                            st.altair_chart(
+                                alt.layer(actual_line, fitted_line).properties(height=240),
+                                use_container_width=True,
+                            )
+
+                            # Show parameters
+                            c1, c2, c3 = st.columns(3)
+                            c1.metric("K (capacity)", f"{int(fit.carrying_capacity):,}")
+                            c2.metric("Segments (r)", ", ".join(f"{r:0.3f}" for r in fit.segment_growth_rates))
+                            c3.metric("R² on ΔS", f"{fit.r2_on_deltas:0.3f}")
+
+                            # Forecast extension
+                            if horizon_ahead > 0:
+                                last_val = float(fit.fitted_series.iloc[-1])
+                                last_r = float(fit.segment_growth_rates[-1]) if fit.segment_growth_rates else 0.0
+                                fc = forecast_piecewise_logistic(
+                                    last_value=last_val,
+                                    months_ahead=horizon_ahead,
+                                    carrying_capacity=fit.carrying_capacity,
+                                    segment_growth_rate=last_r,
+                                    gamma_step_level=fit.gamma_step,
+                                )
+                                fc_index = pd.date_range(
+                                    fit.fitted_series.index[-1] + pd.offsets.MonthEnd(1),
+                                    periods=horizon_ahead,
+                                    freq="M",
+                                )
+                                fc_df = pd.DataFrame({"Forecast": fc}, index=fc_index)
+                                merged = pd.concat([overlay_df, fc_df], axis=0)
+                                chart_fc = (
+                                    alt.Chart(merged.reset_index().rename(columns={"index": "date"}))
+                                    .transform_fold(["Actual", "Fitted", "Forecast"], as_=["Series", "Value"])
+                                    .mark_line()
+                                    .encode(x=alt.X("date:T"), y="Value:Q", color="Series:N")
+                                    .properties(height=240)
+                                )
+                                st.altair_chart(chart_fc, use_container_width=True)
+                    except Exception as e:
+                        st.error(f"Model fit failed: {e}")
 
                 # Deltas
                 deltas = plot_df.diff()
