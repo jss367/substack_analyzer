@@ -8,16 +8,10 @@ from typing import Optional
 
 import altair as alt
 import pandas as pd
-
-# Note: ruptures was previously used; keep import only if needed elsewhere
-import ruptures as rpt  # noqa: F401
 import streamlit as st
 import streamlit.components.v1 as components
 
 from substack_analyzer.model import AdSpendSchedule, SimulationInputs, simulate_growth
-
-# Drag components removed; no custom component declarations needed
-
 
 # Asset paths
 ASSETS_DIR = Path(__file__).parent / "logos"
@@ -960,9 +954,6 @@ def render_data_import() -> None:
                 )
                 st.session_state["events_df"] = edited
 
-                # draggable timeline component removed
-
-                # drag-edit UI removed
                 # Deltas
                 deltas = plot_df.diff()
                 st.subheader("Monthly change (delta)")

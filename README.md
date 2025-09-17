@@ -66,3 +66,7 @@ streamlit run app.py
 The way to use this is to export your csvs from substack for both paid and full subscribers.
 
 Those spreadsheets have two columns... days and number of subscribers...
+
+
+
+This doesn't do seasonality... are there seasonal effects? Is there an end-of-the-year effect?
