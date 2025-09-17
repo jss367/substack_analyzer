@@ -1,6 +1,6 @@
 # substack_analyzer
 
-This is available at https://substackanalyzer.streamlit.app/
+This is available at https://substackanalyzer.streamlit.app/ (just click to wake it up if it's gone to sleep)
 
 ## Quick start
 

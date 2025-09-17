@@ -804,6 +804,7 @@ def render_data_import() -> None:
                 if "Total" in plot_df.columns and "Paid" in plot_df.columns:
                     plot_df["Free"] = plot_df["Total"].astype(float) - plot_df["Paid"].astype(float)
                 st.subheader("Imported series")
+                st.caption("Mode: Paid and unpaid" if "Paid" in plot_df.columns else "Mode: Unpaid only")
                 # Dual-axis toggle for visibility when Paid is much smaller
                 use_dual_axis = st.checkbox(
                     "Use separate right axis for Paid",
@@ -813,6 +814,10 @@ def render_data_import() -> None:
                 # Option to hide/show Total line by default (on when Paid missing)
                 default_show_total = "Paid" not in plot_df.columns
                 show_total = st.checkbox("Show Total line", value=default_show_total)
+                # Legend title reflects whether Paid is plotted
+                has_paid = "Paid" in plot_df.columns
+                plotting_paid = bool(use_dual_axis) and has_paid
+                series_title = "Series (Paid is dashed)" if plotting_paid else "Series"
                 # Altair chart
                 base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
                     x=alt.X("date:T", title="Date")
@@ -829,7 +834,7 @@ def render_data_import() -> None:
                         color=alt.Color(
                             "Series:N",
                             scale=alt.Scale(scheme="tableau10"),
-                            title="Series (Paid is dashed)",
+                            title=series_title,
                         ),
                         tooltip=[
                             alt.Tooltip("date:T", title="Date"),
@@ -853,7 +858,7 @@ def render_data_import() -> None:
                             color=alt.Color(
                                 "Series:N",
                                 scale=alt.Scale(range=["#DB4437"]),
-                                title="Series (Paid is dashed)",
+                                title=series_title,
                             ),
                             tooltip=[
                                 alt.Tooltip("date:T", title="Date"),
@@ -971,6 +976,10 @@ def render_data_import() -> None:
                 base_t = alt.Chart(tail_df.reset_index().rename(columns={"index": "date"})).encode(
                     x=alt.X("date:T", title="Date")
                 )
+                # Tail legend title reflects whether Paid is plotted in tail
+                tail_has_paid = "Paid" in tail_df.columns
+                plotting_paid_t = bool(use_dual_axis) and tail_has_paid
+                series_title_t = "Series (Paid is dashed)" if plotting_paid_t else "Series"
                 left_t = (
                     base_t.transform_fold(
                         [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in tail_df.columns],
@@ -982,7 +991,7 @@ def render_data_import() -> None:
                         color=alt.Color(
                             "Series:N",
                             scale=alt.Scale(scheme="tableau10"),
-                            title="Series (Paid is dashed)",
+                            title=series_title_t,
                         ),
                         tooltip=[
                             alt.Tooltip("date:T", title="Date"),
@@ -1001,7 +1010,7 @@ def render_data_import() -> None:
                             color=alt.Color(
                                 "Series:N",
                                 scale=alt.Scale(range=["#DB4437"]),
-                                title="Series (Paid is dashed)",
+                                title=series_title_t,
                             ),
                             tooltip=[
                                 alt.Tooltip("date:T", title="Date"),
