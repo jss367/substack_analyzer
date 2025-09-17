@@ -11,6 +11,12 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+from substack_analyzer.advanced_model import (
+    EventPulse,
+    SegmentParameters,
+    fit_piecewise_logistic,
+    prepare_daily_history,
+)
 from substack_analyzer.model import AdSpendSchedule, SimulationInputs, simulate_growth
 
 # Asset paths
@@ -704,6 +710,137 @@ def _compute_estimates(
     return estimates
 
 
+def _events_from_dataframe(df: pd.DataFrame | None) -> list[EventPulse]:
+    events: list[EventPulse] = []
+    if df is None or df.empty:
+        return events
+    for row in df.itertuples(index=False):
+        date = getattr(row, "date", None)
+        lift = getattr(row, "lift", 0.0)
+        decay_days = getattr(row, "decay_days", 3.0)
+        if pd.isna(date) or pd.isna(lift) or float(lift) == 0.0:
+            continue
+        try:
+            events.append(
+                EventPulse(
+                    date=pd.to_datetime(date),
+                    lift=float(lift),
+                    decay_days=float(decay_days) if not pd.isna(decay_days) else 3.0,
+                )
+            )
+        except Exception:
+            continue
+    return events
+
+
+def _segments_table(series: pd.Series, segments: list[SegmentParameters]) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for idx, seg in enumerate(segments, start=1):
+        start_date = series.index[seg.start_index]
+        end_date = series.index[seg.end_index]
+        rows.append(
+            {
+                "Segment": idx,
+                "Start": pd.to_datetime(start_date).date(),
+                "End": pd.to_datetime(end_date).date(),
+                "Growth rate": seg.growth_rate,
+                "Carrying capacity": seg.carrying_capacity,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def render_modeling_tab() -> None:
+    st.subheader("Phase-aware logistic model")
+    total_series = st.session_state.get("import_total")
+    paid_series = st.session_state.get("import_paid")
+    if total_series is None and paid_series is None:
+        st.info("Import your Substack exports in the Data Import tab to run the model.")
+        return
+
+    try:
+        history = prepare_daily_history(total_series, paid_series)
+    except Exception as exc:
+        st.error(f"Could not prepare history: {exc}")
+        return
+
+    series_map = {
+        "Total": history.total,
+        "Free": history.free,
+        "Paid": history.paid,
+    }
+    default_idx = 0 if total_series is not None else 2
+    target_label = st.selectbox("Series to model", list(series_map.keys()), index=default_idx)
+    daily_series = series_map[target_label]
+
+    st.caption(
+        "We fit a logistic growth curve with change points. External events are "
+        "treated as pulses that add incremental subscribers."
+    )
+
+    monthly_series = daily_series.resample("M").last()
+    max_changes = st.slider("Max change points", 0, 6, 3, 1)
+    candidate_idx = detect_change_points(monthly_series, max_changes=max_changes)
+    candidate_dates = [monthly_series.dropna().index[i] for i in candidate_idx if i < len(monthly_series)]
+    selected_dates = st.multiselect(
+        "Selected change points",
+        candidate_dates,
+        default=candidate_dates,
+        format_func=lambda d: pd.to_datetime(d).strftime("%Y-%m"),
+    )
+
+    events_df = st.session_state.get("events_df")
+    pulses = _events_from_dataframe(events_df)
+    if pulses:
+        st.markdown(
+            "**Events included**: "
+            + ", ".join(f"{p.date.date()} (+{int(round(p.lift))} subs)" for p in pulses)
+        )
+    else:
+        st.caption(
+            "Add event lift estimates in the Data Import tab to account for shout-outs or ad spend bursts."
+        )
+
+    try:
+        fit_result = fit_piecewise_logistic(daily_series, selected_dates, events=pulses)
+    except Exception as exc:
+        st.error(f"Model fitting failed: {exc}")
+        return
+
+    st.markdown("### Fit diagnostics")
+    dcol1, dcol2, dcol3 = st.columns(3)
+    dcol1.metric("MAE", f"{fit_result.diagnostics['mae']:.2f}")
+    dcol2.metric("RMSE", f"{fit_result.diagnostics['rmse']:.2f}")
+    dcol3.metric("Final abs. error", f"{fit_result.diagnostics['final_residual']:.2f}")
+
+    seg_df = _segments_table(daily_series, fit_result.segments)
+    st.markdown("### Segment parameters")
+    st.dataframe(seg_df, use_container_width=True)
+
+    chart_df = pd.DataFrame(
+        {
+            "Actual": daily_series,
+            "Fitted": fit_result.fitted,
+            "Event contribution": fit_result.event_contribution,
+        }
+    ).reset_index().rename(columns={"index": "date"})
+
+    st.markdown("### Actual vs fitted")
+    chart = (
+        alt.Chart(chart_df)
+        .transform_fold(["Actual", "Fitted"], as_=["Series", "Value"])
+        .mark_line()
+        .encode(x="date:T", y="Value:Q", color="Series:N", tooltip=["date:T", "Series:N", "Value:Q"])
+    )
+    st.altair_chart(chart, use_container_width=True)
+
+    st.markdown("### Event pulses (daily increment)")
+    st.area_chart(
+        fit_result.event_contribution.rename("Incremental subscribers"),
+        use_container_width=True,
+    )
+
+
 def render_data_import() -> None:
     st.subheader("Import Substack exports (time series)")
     st.caption(
@@ -873,7 +1010,13 @@ def render_data_import() -> None:
                             .mark_rule(color="#8e44ad", size=3)
                             .encode(
                                 x="date:T",
-                                tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
+                                tooltip=[
+                                    "date:T",
+                                    "type:N",
+                                    "notes:N",
+                                    "cost:Q",
+                                    alt.Tooltip("lift:Q", title="Lift"),
+                                ],
                             )
                         )
                         layers.append(markers)
@@ -934,7 +1077,14 @@ def render_data_import() -> None:
                 st.caption("Track shout-outs, ad campaigns, launches, etc. Dates must match the series timeline.")
                 default_events = pd.DataFrame(
                     [
-                        {"date": None, "type": "Ad spend", "notes": "", "cost": 0.0},
+                        {
+                            "date": None,
+                            "type": "Ad spend",
+                            "notes": "",
+                            "cost": 0.0,
+                            "lift": 0.0,
+                            "decay_days": 3.0,
+                        },
                     ]
                 )
                 events_df = st.session_state.get("events_df", default_events)
@@ -947,7 +1097,19 @@ def render_data_import() -> None:
                             "Type", options=["Ad spend", "Shout-out", "Other"], width="medium"
                         ),
                         "notes": st.column_config.TextColumn("Notes", width="large"),
-                        "cost": st.column_config.NumberColumn("Cost ($)", step=10.0, help="For Ad spend ROI calc"),
+                        "cost": st.column_config.NumberColumn(
+                            "Cost ($)", step=10.0, help="For Ad spend ROI calc"
+                        ),
+                        "lift": st.column_config.NumberColumn(
+                            "Lift (subs)",
+                            step=10.0,
+                            help="Estimated incremental subscribers from this event",
+                        ),
+                        "decay_days": st.column_config.NumberColumn(
+                            "Decay (days)",
+                            step=1.0,
+                            help="How many days the lift persists (exponential decay)",
+                        ),
                     },
                     use_container_width=True,
                     key="events_editor",
@@ -1021,7 +1183,13 @@ def render_data_import() -> None:
                             .mark_rule(color="#8e44ad", size=3)
                             .encode(
                                 x="date:T",
-                                tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
+                                tooltip=[
+                                    "date:T",
+                                    "type:N",
+                                    "notes:N",
+                                    "cost:Q",
+                                    alt.Tooltip("lift:Q", title="Lift"),
+                                ],
                             )
                         )
                         layers_t.append(markers_t)
@@ -1183,10 +1351,11 @@ render_brand_header()
 
 # Tabs
 with st.container():
-    tab_import, tab_sim, tab_est, tab_out, tab_help = st.tabs(
+    tab_import, tab_sim, tab_model, tab_est, tab_out, tab_help = st.tabs(
         [
             "Data Import",
             "Simulator",
+            "Modeling",
             "Estimators",
             "Outputs & Formulas",
             "Help",
@@ -1209,6 +1378,9 @@ with tab_sim:
         "MVP model: instant conversion of a share of new free subs, small ongoing conversion of existing free base, "
         "and simple net revenue after Substack + Stripe fees."
     )
+
+with tab_model:
+    render_modeling_tab()
 
 with tab_est:
     render_estimators()
