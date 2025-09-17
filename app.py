@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import io
+import json
 import math
+import zipfile
 from contextlib import suppress
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -650,6 +654,199 @@ def _read_series(file, has_header: bool, date_sel, count_sel) -> pd.Series:
     return s
 
 
+def _snapshot_state() -> dict:
+    keys = [
+        "start_free",
+        "start_premium",
+        "horizon_months",
+        "organic_growth",
+        "churn_free",
+        "churn_prem",
+        "conv_new",
+        "conv_ongoing",
+        "cac",
+        "ad_manager_fee",
+        "price_monthly",
+        "price_annual",
+        "substack_pct",
+        "stripe_pct",
+        "stripe_flat",
+        "annual_share",
+        "spend_mode_index",
+        "ad_stage1",
+        "ad_stage2",
+        "ad_const",
+        "est_window",
+        "max_changes_detect",
+    ]
+    out: dict = {}
+    for k in keys:
+        if k in st.session_state:
+            v = st.session_state[k]
+            # Cast numpy/pandas scalars to native types
+            if hasattr(v, "item"):
+                try:
+                    v = v.item()
+                except Exception:
+                    pass
+            out[k] = v
+    return out
+
+
+def _collect_session_bundle(include_fit: bool, include_sim: bool) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # metadata
+        meta = {
+            "schema_version": 1,
+            "app_name": "Substack Ads ROI Simulator",
+            "exported_at": datetime.utcnow().isoformat() + "Z",
+        }
+        zf.writestr("metadata.json", json.dumps(meta, indent=2))
+
+        # state
+        state = _snapshot_state()
+        zf.writestr("state.json", json.dumps(state, indent=2))
+
+        # series
+        total = st.session_state.get("import_total")
+        if total is not None and isinstance(total, pd.Series) and not total.empty:
+            df_t = total.rename("count").to_frame()
+            df_t.index.name = "date"
+            zf.writestr("series_total.csv", df_t.to_csv(index=True))
+        paid = st.session_state.get("import_paid")
+        if paid is not None and isinstance(paid, pd.Series) and not paid.empty:
+            df_p = paid.rename("count").to_frame()
+            df_p.index.name = "date"
+            zf.writestr("series_paid.csv", df_p.to_csv(index=True))
+
+        # events
+        ev = st.session_state.get("events_df")
+        if ev is not None and isinstance(ev, pd.DataFrame) and not ev.empty:
+            ev_out = ev.copy()
+            with suppress(Exception):
+                ev_out["date"] = pd.to_datetime(ev_out["date"]).dt.date.astype(str)
+            zf.writestr("events.csv", ev_out.to_csv(index=False))
+
+        # fit (optional)
+        if include_fit and (fit := st.session_state.get("pwlog_fit")) is not None:
+            try:
+                fit_dict = {
+                    "carrying_capacity": float(getattr(fit, "carrying_capacity", 0.0)),
+                    "segment_growth_rates": [float(x) for x in getattr(fit, "segment_growth_rates", [])],
+                    "breakpoints": list(getattr(fit, "breakpoints", [])),
+                    "gamma_pulse": float(getattr(fit, "gamma_pulse", 0.0)),
+                    "gamma_step": float(getattr(fit, "gamma_step", 0.0)),
+                    "r2_on_deltas": float(getattr(fit, "r2_on_deltas", 0.0)),
+                }
+                zf.writestr("fit.json", json.dumps(fit_dict, indent=2))
+                fitted = getattr(fit, "fitted_series", None)
+                if isinstance(fitted, pd.Series) and not fitted.empty:
+                    df_f = fitted.rename("fitted").to_frame()
+                    df_f.index.name = "date"
+                    zf.writestr("fit_fitted_series.csv", df_f.to_csv(index=True))
+            except Exception:
+                # Skip fit if serialization fails
+                pass
+
+        # simulation (optional)
+        if include_sim and (sim := st.session_state.get("sim_df")) is not None:
+            try:
+                zf.writestr("sim.csv", sim.to_csv(index=False))
+            except Exception:
+                pass
+
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _apply_session_bundle(file_like) -> None:
+    with zipfile.ZipFile(file_like, mode="r") as zf:
+        # metadata
+        try:
+            meta = json.loads(zf.read("metadata.json"))
+            if int(meta.get("schema_version", 0)) != 1:
+                raise ValueError("Unsupported bundle version. Please update the app.")
+        except KeyError:
+            # No metadata, assume v1
+            pass
+
+        # state
+        try:
+            state = json.loads(zf.read("state.json"))
+            for k, v in state.items():
+                st.session_state[k] = v
+        except KeyError:
+            pass
+
+        # series: total
+        with suppress(KeyError, Exception):
+            df_t = pd.read_csv(io.BytesIO(zf.read("series_total.csv")))
+            if "date" in df_t.columns and "count" in df_t.columns:
+                s_t = (
+                    df_t.assign(date=lambda d: pd.to_datetime(d["date"]))
+                    .dropna(subset=["date"])  # type: ignore[arg-type]
+                    .set_index("date")["count"]
+                )
+                s_t = pd.to_numeric(s_t, errors="coerce").dropna()
+                if not s_t.empty:
+                    s_t.index = s_t.index.to_period("M").to_timestamp("M")
+                    s_t = s_t.sort_index()
+                    st.session_state["import_total"] = s_t
+
+        # series: paid
+        with suppress(KeyError, Exception):
+            df_p = pd.read_csv(io.BytesIO(zf.read("series_paid.csv")))
+            if "date" in df_p.columns and "count" in df_p.columns:
+                s_p = (
+                    df_p.assign(date=lambda d: pd.to_datetime(d["date"]))
+                    .dropna(subset=["date"])  # type: ignore[arg-type]
+                    .set_index("date")["count"]
+                )
+                s_p = pd.to_numeric(s_p, errors="coerce").dropna()
+                if not s_p.empty:
+                    s_p.index = s_p.index.to_period("M").to_timestamp("M")
+                    s_p = s_p.sort_index()
+                    st.session_state["import_paid"] = s_p
+
+        # events
+        with suppress(KeyError, Exception):
+            ev = pd.read_csv(io.BytesIO(zf.read("events.csv")))
+            if not ev.empty:
+                if "date" in ev.columns:
+                    with suppress(Exception):
+                        ev["date"] = pd.to_datetime(ev["date"]).dt.date
+                st.session_state["events_df"] = ev
+
+
+def render_save_load() -> None:
+    st.subheader("Save / Load session")
+    st.caption("Download a portable bundle to save your work, or upload to restore it later.")
+
+    c1, c2 = st.columns(2)
+    with c1:
+        has_fit = st.session_state.get("pwlog_fit") is not None
+        include_fit = st.checkbox("Include model fit", value=bool(has_fit))
+        include_sim = st.checkbox("Include simulation results", value=False)
+        bundle = _collect_session_bundle(include_fit, include_sim)
+        st.download_button(
+            "Download session bundle (.zip)",
+            data=bundle,
+            file_name="substack_session.zip",
+            mime="application/zip",
+        )
+    with c2:
+        uploaded = st.file_uploader("Upload session bundle (.zip)", type=["zip"], key="session_bundle")
+        if uploaded is not None:
+            try:
+                _apply_session_bundle(uploaded)
+                st.success("Session restored. Switching to Simulator…")
+                st.session_state["switch_to_sim"] = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to load bundle: {e}")
+
+
 def _compute_estimates(
     all_series: Optional[pd.Series], paid_series: Optional[pd.Series], window_months: int = 6
 ) -> dict:
@@ -1264,12 +1461,13 @@ render_brand_header()
 
 # Tabs
 with st.container():
-    tab_import, tab_sim, tab_est, tab_out, tab_help = st.tabs(
+    tab_import, tab_sim, tab_est, tab_out, tab_save, tab_help = st.tabs(
         [
             "Data Import",
             "Simulator",
             "Estimators",
             "Outputs & Formulas",
+            "Save / Load",
             "Help",
         ]
     )
@@ -1296,6 +1494,9 @@ with tab_est:
 
 with tab_out:
     render_outputs_formulas()
+
+with tab_save:
+    render_save_load()
 
 with tab_help:
     render_help()
