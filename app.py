@@ -1461,13 +1461,14 @@ render_brand_header()
 
 # Tabs
 with st.container():
-    tab_import, tab_sim, tab_est, tab_out, tab_save, tab_help = st.tabs(
+    tab_import, tab_sim, tab_est, tab_out, tab_save, tab_stages, tab_help = st.tabs(
         [
             "Data Import",
             "Simulator",
             "Estimators",
             "Outputs & Formulas",
             "Save / Load",
+            "Stages",
             "Help",
         ]
     )
@@ -1497,6 +1498,23 @@ with tab_out:
 
 with tab_save:
     render_save_load()
+
+with tab_stages:
+    st.subheader("Modeling Stages")
+    st.markdown(
+        """
+1. **File Upload & Parsing**: Upload All/Paid exports. Outputs `observations_df` (daily preferred) with imputation flags; quick charts.
+2. **Events & Covariates**: Add shoutouts/ads; adstock + diminishing returns; seasonality features. Outputs `events_df`, `covariates_df`, `features_df`.
+3. **Adds/Churn Prep**: From logs (preferred) or totals-only via smoothing; tenure-based churn hazard. Outputs `adds_df`, `churn_df`.
+4. **Model Fitting (Pro)**: Bayesian state-space with saturation, events, and uncertainty. Outputs `bayes_fit`, fit plots.
+5. **Diagnostics**: Rolling-origin CV, PPC, PSIS-LOO; attribution and elasticity checks. Outputs `validation_report`.
+6. **Forecasting & Scenarios**: Posterior simulation under levers (events, ads, cadence, market). Outputs `forecast_df`.
+7. **Cohort & Finance Simulator**: Monthly KPIs, ROAS, CAC, payback. Outputs `sim_df`.
+8. **Outputs & Docs**: Formulas and downloadable artifacts.
+
+Status: Stages 1–3 (import, events, quick estimators) and Quick Fit are implemented. Pro Fit (Bayesian), diagnostics, and scenario planner are in progress.
+        """
+    )
 
 with tab_help:
     render_help()
