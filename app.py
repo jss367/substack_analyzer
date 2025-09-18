@@ -1408,16 +1408,10 @@ def render_data_import() -> None:
                         if fit_series_source is None or fit_series_source.empty:
                             st.info("Need Total or Free series to fit.")
                         else:
-                            extra_exog = None
-                            with suppress(Exception):
-                                fdf = st.session_state.get("features_df")
-                                if fdf is not None and not fdf.empty and "ad_effect_log" in fdf.columns:
-                                    extra_exog = fdf["ad_effect_log"]
                             fit = fit_piecewise_logistic(
                                 total_series=fit_series_source,
                                 breakpoints=breakpoints,
                                 events_df=st.session_state.get("events_df"),
-                                extra_exog=extra_exog,
                             )
                             st.session_state["pwlog_fit"] = fit
                             # Overlay fitted curve
