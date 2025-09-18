@@ -935,7 +935,7 @@ def _compute_estimates(
 
 
 def render_data_import() -> None:
-    st.subheader("Import Substack exports (time series)")
+    st.subheader("Stage 1: Import Substack exports (time series)")
     st.caption(
         "Upload two files: All subscribers over time, and Paid subscribers over time. "
         "No headers by default: first column is date, second is count."
@@ -1196,8 +1196,8 @@ def render_data_import() -> None:
                         except Exception:
                             st.info("Could not add detected dates. Try again after loading data.")
 
-                # Events table: add/edit annotations
-                st.subheader("Events & annotations")
+                # Stage 2: Events & annotations
+                st.subheader("Stage 2: Events & annotations")
                 st.caption("Track shout-outs, ad campaigns, launches, etc. Dates must match the series timeline.")
                 default_events = pd.DataFrame(
                     [
@@ -1394,8 +1394,8 @@ def render_data_import() -> None:
                                 mime="text/csv",
                             )
 
-                # Model fitting (piecewise logistic with events)
-                st.subheader("Fit piecewise-logistic model (with events)")
+                # Stage 4: Model fitting (Quick Fit)
+                st.subheader("Stage 4: Model fitting (Quick Fit)")
                 st.caption(
                     "Fits on Total (preferred) or Free if Total is unavailable. "
                     "Uses detected change points as segments."
@@ -1482,9 +1482,9 @@ def render_data_import() -> None:
                     except Exception as e:
                         st.error(f"Model fit failed: {e}")
 
-                # Deltas
+                # Stage 5: Diagnostics (delta view)
                 deltas = plot_df.diff()
-                st.subheader("Monthly change (delta)")
+                st.subheader("Stage 5: Diagnostics (delta view)")
                 st.bar_chart(deltas.fillna(0))
                 # Tail-only view with window slider placed here
                 window = st.slider("Estimation window (last N months)", 3, 12, window, 1, key="est_window")
@@ -1636,7 +1636,7 @@ def render_data_import() -> None:
 
 
 def render_outputs_formulas() -> None:
-    st.subheader("Outputs and formulas")
+    st.subheader("Stage 8: Outputs and formulas")
 
     st.markdown(
         """
