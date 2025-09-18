@@ -1726,6 +1726,27 @@ with tab_sim:
     sim_df = result.monthly
     st.session_state["sim_df"] = sim_df
     st.subheader("Stage 7: Cohort & Finance Simulator")
+    with st.expander("Save / Load (quick access)", expanded=False):
+        has_fit_q = st.session_state.get("pwlog_fit") is not None
+        include_fit_q = st.checkbox("Include model fit", value=bool(has_fit_q), key="quick_include_fit")
+        include_sim_q = st.checkbox("Include simulation results", value=False, key="quick_include_sim")
+        bundle_q = _collect_session_bundle(include_fit_q, include_sim_q)
+        st.download_button(
+            "Export my config (.zip)",
+            data=bundle_q,
+            file_name="substack_session.zip",
+            mime="application/zip",
+            key="quick_export_btn",
+        )
+        uploaded_q = st.file_uploader("Restore session bundle (.zip)", type=["zip"], key="quick_session_bundle")
+        if uploaded_q is not None:
+            try:
+                _apply_session_bundle(uploaded_q)
+                st.success("Session restored. Switching to Simulator…")
+                st.session_state["switch_to_sim"] = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to load bundle: {e}")
     render_kpis(sim_df)
     with st.expander("Monthly details", expanded=False):
         st.dataframe(sim_df, width="stretch")
