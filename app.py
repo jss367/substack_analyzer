@@ -997,6 +997,43 @@ def render_data_import() -> None:
                     plot_df["Free"] = plot_df["Total"].astype(float) - plot_df["Paid"].astype(float)
                 st.subheader("Imported series")
                 st.caption("Mode: Paid and unpaid" if "Paid" in plot_df.columns else "Mode: Unpaid only")
+                # Stage 1 output: build observations_df (current granularity)
+                try:
+                    idx = plot_df.index
+                    total = plot_df.get("Total")
+                    paid = plot_df.get("Paid")
+                    free = None
+                    if total is not None and paid is not None:
+                        free = (total.astype(float) - paid.astype(float)).clip(lower=0)
+                    elif total is not None:
+                        free = total.astype(float) - float(_get_state("start_premium", 0))
+                    obs = pd.DataFrame(
+                        {
+                            "active_total": (
+                                total.astype(float) if total is not None else pd.Series(index=idx, dtype=float)
+                            ),
+                            "active_paid": (
+                                paid.astype(float) if paid is not None else pd.Series(index=idx, dtype=float)
+                            ),
+                            "active_free": (
+                                free.astype(float) if free is not None else pd.Series(index=idx, dtype=float)
+                            ),
+                            "is_imputed": False,
+                        },
+                        index=idx,
+                    )
+                    obs.index.name = "date"
+                    st.session_state["observations_df"] = obs
+                    with st.expander("Stage 1 output: observations_df", expanded=False):
+                        st.dataframe(obs.reset_index(), use_container_width=True)
+                        st.download_button(
+                            "Download observations.csv",
+                            data=obs.reset_index().to_csv(index=False).encode("utf-8"),
+                            file_name="observations.csv",
+                            mime="text/csv",
+                        )
+                except Exception:
+                    pass
                 # Dual-axis toggle for visibility when Paid is much smaller
                 use_dual_axis = st.checkbox(
                     "Use separate right axis for Paid",
