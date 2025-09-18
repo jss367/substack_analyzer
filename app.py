@@ -1725,6 +1725,7 @@ with tab_sim:
     result = simulate_growth(inputs)
     sim_df = result.monthly
     st.session_state["sim_df"] = sim_df
+    st.subheader("Stage 7: Cohort & Finance Simulator")
     render_kpis(sim_df)
     with st.expander("Monthly details", expanded=False):
         st.dataframe(sim_df, width="stretch")
