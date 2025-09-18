@@ -18,6 +18,7 @@ class PiecewiseLogisticFit:
     residuals: pd.Series
     sse: float
     r2_on_deltas: float
+    gamma_exog: Optional[float] = None
 
 
 def _ensure_month_end_index(series: pd.Series) -> pd.Series:
@@ -76,15 +77,16 @@ def fit_piecewise_logistic(
     breakpoints: Optional[List[int]] = None,
     events_df: Optional[pd.DataFrame] = None,
     k_grid: Optional[Sequence[float]] = None,
+    extra_exog: Optional[pd.Series] = None,
 ) -> PiecewiseLogisticFit:
     """Fit a piecewise-logistic model on monthly totals via grid-search over K and OLS.
 
     Discrete dynamic on month t (t>=1):
-        ΔS_t = r_seg(t) * S_{t-1} * (1 - S_{t-1}/K) + γ_pulse * pulse_t + γ_step * step_t + ε_t
+        ΔS_t = r_seg(t) * S_{t-1} * (1 - S_{t-1}/K) + γ_pulse * pulse_t + γ_step * step_t + γ_exog * exog_t + ε_t
 
     - r_seg(t) is piecewise-constant across user-provided breakpoints (indices in [0, n)).
     - K (carrying capacity) is shared across segments and chosen by grid-search.
-    - γ_pulse, γ_step are global coefficients.
+    - γ_pulse, γ_step, γ_exog are global coefficients.
     - Parameters are estimated by OLS on ΔS_t for each candidate K; pick K with lowest SSE.
     """
     s = _ensure_month_end_index(total_series)
@@ -104,6 +106,16 @@ def fit_piecewise_logistic(
     # Events
     pulse, step = _event_regressors(y.index, events_df)
 
+    # Optional exogenous aligned to y index
+    exog = None
+    if extra_exog is not None:
+        try:
+            exog = extra_exog.reindex(y.index).astype(float).to_numpy()
+            # Replace nans with zeros
+            exog = np.where(np.isfinite(exog), exog, 0.0)
+        except Exception:
+            exog = None
+
     # K grid
     max_s = float(s.max())
     if k_grid is None:
@@ -114,7 +126,7 @@ def fit_piecewise_logistic(
 
     for K in k_grid:
         X_base = (s_lag * (1.0 - s_lag / K)).to_numpy().astype(float)
-        # Design matrix: one column per segment (X_base masked), plus pulse, step
+        # Design matrix: one column per segment (X_base masked), plus pulse, step, optional exog
         X_cols: List[np.ndarray] = []
         for start, end in seg_bounds:
             mask = np.zeros(n, dtype=float)
@@ -122,6 +134,8 @@ def fit_piecewise_logistic(
             X_cols.append(X_base * mask)
         X_cols.append(pulse.astype(float))
         X_cols.append(step.astype(float))
+        if exog is not None:
+            X_cols.append(exog.astype(float))
         X = np.column_stack(X_cols)
         y_vec = y.to_numpy().astype(float)
 
@@ -135,13 +149,14 @@ def fit_piecewise_logistic(
         r_segments = [float(b) for b in beta[:num_segments]]
         gamma_pulse = float(beta[num_segments])
         gamma_step = float(beta[num_segments + 1])
+        beta_offset = num_segments + 2
+        gamma_exog = float(beta[beta_offset]) if exog is not None and len(beta) > beta_offset else None
 
         # Reconstruct fitted series recursively
         s_hat = [float(s.iloc[0])]
         for t in range(1, s.size):
             x_t = s_hat[-1] * (1.0 - s_hat[-1] / K)
             # Determine which segment t-1 (for ΔS at month t) belongs to
-            # Map t-1 in [0, n-1] to segment
             seg_idx = 0
             for j, (a, b) in enumerate(seg_bounds):
                 if (t - 1) >= a and (t - 1) <= b:
@@ -149,10 +164,12 @@ def fit_piecewise_logistic(
                     break
             delta = r_segments[seg_idx] * x_t
             # Add events
-            # Align pulse/step arrays with y index (starts at s.index[1])
             if t - 1 < len(pulse):
                 delta += gamma_pulse * float(pulse[t - 1])
                 delta += gamma_step * float(step[t - 1])
+            # Add optional exogenous
+            if exog is not None and (t - 1) < len(exog) and gamma_exog is not None:
+                delta += gamma_exog * float(exog[t - 1])
             s_hat.append(max(s_hat[-1] + delta, 0.0))
 
         fitted = pd.Series(s_hat, index=s.index)
@@ -173,6 +190,7 @@ def fit_piecewise_logistic(
             residuals=resid,
             sse=sse,
             r2_on_deltas=float(r2),
+            gamma_exog=gamma_exog,
         )
 
         if sse < best_sse:

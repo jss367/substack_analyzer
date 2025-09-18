@@ -728,6 +728,22 @@ def _collect_session_bundle(include_fit: bool, include_sim: bool) -> bytes:
                 ev_out["date"] = pd.to_datetime(ev_out["date"]).dt.date.astype(str)
             zf.writestr("events.csv", ev_out.to_csv(index=False))
 
+        # covariates
+        covariates = st.session_state.get("covariates_df")
+        if covariates is not None and isinstance(covariates, pd.DataFrame) and not covariates.empty:
+            cov_out = covariates.copy()
+            with suppress(Exception):
+                cov_out["date"] = cov_out["date"].dt.date.astype(str)
+            zf.writestr("covariates.csv", cov_out.to_csv(index=False))
+
+        # features
+        features = st.session_state.get("features_df")
+        if features is not None and isinstance(features, pd.DataFrame) and not features.empty:
+            feat_out = features.copy()
+            with suppress(Exception):
+                feat_out["date"] = feat_out["date"].dt.date.astype(str)
+            zf.writestr("features.csv", feat_out.to_csv(index=False))
+
         # fit (optional)
         if include_fit and (fit := st.session_state.get("pwlog_fit")) is not None:
             try:
@@ -817,6 +833,22 @@ def _apply_session_bundle(file_like) -> None:
                     with suppress(Exception):
                         ev["date"] = pd.to_datetime(ev["date"]).dt.date
                 st.session_state["events_df"] = ev
+
+        # covariates
+        with suppress(KeyError, Exception):
+            cov = pd.read_csv(io.BytesIO(zf.read("covariates.csv")))
+            if "date" in cov.columns and "ad_spend" in cov.columns:
+                cov["date"] = pd.to_datetime(cov["date"])
+                cov = cov.set_index("date")["ad_spend"]
+                st.session_state["covariates_df"] = cov
+
+        # features
+        with suppress(KeyError, Exception):
+            feat = pd.read_csv(io.BytesIO(zf.read("features.csv")))
+            if "date" in feat.columns and "pulse" in feat.columns and "step" in feat.columns:
+                feat["date"] = pd.to_datetime(feat["date"])
+                feat = feat.set_index("date")
+                st.session_state["features_df"] = feat
 
 
 def render_save_load() -> None:
@@ -1189,6 +1221,179 @@ def render_data_import() -> None:
                 )
                 st.session_state["events_df"] = edited
 
+                # Stage 2: Build covariates/features (monthly) from events and optional ad spend upload
+                with st.expander("Stage 2: Events & Features (monthly)", expanded=False):
+                    st.caption("Encodes pulse/step features from Events and optional ad spend adstock + log transform.")
+                    cov_col1, cov_col2 = st.columns(2)
+                    with cov_col1:
+                        ad_file = st.file_uploader(
+                            "Optional: Ad spend CSV (date, spend)", type=["csv", "xlsx", "xls"], key="ad_csv"
+                        )
+                    with cov_col2:
+                        lam = st.slider("Adstock lambda (carryover)", 0.0, 0.99, 0.5, 0.01)
+                        theta = st.number_input("Log transform theta", min_value=1.0, value=500.0, step=50.0)
+
+                    # Determine monthly index from imported series
+                    monthly_index = plot_df.index
+                    pulse = pd.Series(0.0, index=monthly_index, name="pulse")
+                    step = pd.Series(0.0, index=monthly_index, name="step")
+                    ev_src = st.session_state.get("events_df")
+                    if ev_src is not None and not ev_src.empty:
+                        ev2 = ev_src.dropna(subset=["date"]).copy()
+                        with suppress(Exception):
+                            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                        for _, r in ev2.iterrows():
+                            d = r.get("date")
+                            if pd.isna(d) or d not in monthly_index:
+                                continue
+                            cost = float(r.get("cost", 1.0) or 1.0)
+                            kind = str(r.get("type", ""))
+                            # Pulse weight: cost for Ad spend, 1.0 otherwise
+                            weight = cost if kind.lower() in {"ad spend", "ad"} else 1.0
+                            pulse.loc[d] += float(weight)
+                            # Step from event month onward
+                            step.loc[d:] += 1.0
+
+                    # Optional ad spend covariate
+                    ad_spend = pd.Series(0.0, index=monthly_index, name="ad_spend")
+                    if ad_file is not None:
+                        try:
+                            if ad_file.name.lower().endswith((".xlsx", ".xls")):
+                                ad_df = pd.read_excel(ad_file)
+                            else:
+                                ad_df = pd.read_csv(ad_file)
+                            if {"date", "spend"}.issubset(ad_df.columns):
+                                ad_df = ad_df.assign(date=lambda d: pd.to_datetime(d["date"]))
+                                ad_df = ad_df.dropna(subset=["date"])
+                                ad_df["date"] = ad_df["date"].dt.to_period("M").dt.to_timestamp("M")
+                                ad_df = ad_df.groupby("date", as_index=True)["spend"].sum().sort_index()
+                                ad_spend = ad_df.reindex(monthly_index).fillna(0.0)
+                        except Exception:
+                            st.info("Could not parse ad spend CSV; expecting columns: date, spend")
+
+                    # Adstock and log transform
+                    adstock = pd.Series(0.0, index=monthly_index, name="adstock")
+                    if not ad_spend.empty:
+                        prev = 0.0
+                        vals: list[float] = []
+                        for v in ad_spend.to_list():
+                            s_val = float(v) + float(lam) * float(prev)
+                            vals.append(s_val)
+                            prev = s_val
+                        adstock = pd.Series(vals, index=monthly_index, name="adstock")
+                    ad_effect_log = pd.Series(
+                        (adstock / max(theta, 1e-9)).add(1.0).apply(lambda x: float(math.log(x))),
+                        index=monthly_index,
+                        name="ad_effect_log",
+                    )
+
+                    covariates_df = pd.DataFrame({"ad_spend": ad_spend})
+                    features_df = pd.DataFrame(
+                        {"pulse": pulse, "step": step, "adstock": adstock, "ad_effect_log": ad_effect_log}
+                    )
+
+                    st.session_state["covariates_df"] = covariates_df
+                    st.session_state["features_df"] = features_df
+
+                    st.markdown("**Outputs**: `events_df` (above), `covariates_df`, `features_df`.")
+                    st.dataframe(features_df.reset_index(), use_container_width=True)
+                    dcol1, dcol2 = st.columns(2)
+                    with dcol1:
+                        st.download_button(
+                            "Download covariates.csv",
+                            data=covariates_df.reset_index().to_csv(index=False).encode("utf-8"),
+                            file_name="covariates.csv",
+                            mime="text/csv",
+                        )
+                    with dcol2:
+                        st.download_button(
+                            "Download features.csv",
+                            data=features_df.reset_index().to_csv(index=False).encode("utf-8"),
+                            file_name="features.csv",
+                            mime="text/csv",
+                        )
+
+                # Stage 3: Adds & Churn (monthly heuristics)
+                with st.expander("Stage 3: Adds & Churn (monthly)", expanded=False):
+                    st.caption("Totals-only path: derive gross adds from net deltas using churn rate heuristics.")
+                    # Determine series
+                    total_s = plot_df.get("Total") if "Total" in plot_df.columns else None
+                    paid_s = plot_df.get("Paid") if "Paid" in plot_df.columns else None
+                    free_s = None
+                    if total_s is not None and paid_s is not None:
+                        free_s = (total_s.astype(float) - paid_s.astype(float)).clip(lower=0)
+                    # Churn rates
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        churn_free_est = st.number_input(
+                            "Monthly churn rate (free)",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=float(_get_state("churn_free", 0.0)),
+                            step=0.001,
+                            format="%0.3f",
+                        )
+                    with c2:
+                        churn_paid_est = st.number_input(
+                            "Monthly churn rate (paid)",
+                            min_value=0.0,
+                            max_value=1.0,
+                            value=float(_get_state("churn_prem", 0.0)),
+                            step=0.001,
+                            format="%0.3f",
+                        )
+                    # Compute
+                    adds_rows: list[dict] = []
+                    churn_rows: list[dict] = []
+                    idx = plot_df.index
+                    for i, d in enumerate(idx):
+                        if i == 0:
+                            continue
+                        prev_d = idx[i - 1]
+                        if free_s is not None:
+                            free_prev = float(free_s.loc[prev_d])
+                            free_now = float(free_s.loc[d])
+                            canc_free = max(free_prev * churn_free_est, 0.0)
+                            net_free = free_now - free_prev
+                            adds_free = max(net_free + canc_free, 0.0)
+                        else:
+                            canc_free = float("nan")
+                            adds_free = float("nan")
+                        if paid_s is not None:
+                            paid_prev = float(paid_s.loc[prev_d])
+                            paid_now = float(paid_s.loc[d])
+                            canc_paid = max(paid_prev * churn_paid_est, 0.0)
+                            net_paid = paid_now - paid_prev
+                            adds_paid = max(net_paid + canc_paid, 0.0)
+                        else:
+                            canc_paid = float("nan")
+                            adds_paid = float("nan")
+                        adds_rows.append({"date": d, "gross_adds_free": adds_free, "gross_adds_paid": adds_paid})
+                        churn_rows.append({"date": d, "cancels_free": canc_free, "cancels_paid": canc_paid})
+                    if adds_rows:
+                        adds_df = pd.DataFrame(adds_rows).set_index("date")
+                        churn_df = pd.DataFrame(churn_rows).set_index("date")
+                        st.session_state["adds_df"] = adds_df
+                        st.session_state["churn_df"] = churn_df
+                        st.markdown("**Outputs**: `adds_df`, `churn_df` (monthly, heuristics).")
+                        st.dataframe(adds_df.reset_index(), use_container_width=True)
+                        st.dataframe(churn_df.reset_index(), use_container_width=True)
+                        b1, b2 = st.columns(2)
+                        with b1:
+                            st.download_button(
+                                "Download adds.csv",
+                                data=adds_df.reset_index().to_csv(index=False).encode("utf-8"),
+                                file_name="adds.csv",
+                                mime="text/csv",
+                            )
+                        with b2:
+                            st.download_button(
+                                "Download churn.csv",
+                                data=churn_df.reset_index().to_csv(index=False).encode("utf-8"),
+                                file_name="churn.csv",
+                                mime="text/csv",
+                            )
+
                 # Model fitting (piecewise logistic with events)
                 st.subheader("Fit piecewise-logistic model (with events)")
                 st.caption(
@@ -1203,10 +1408,16 @@ def render_data_import() -> None:
                         if fit_series_source is None or fit_series_source.empty:
                             st.info("Need Total or Free series to fit.")
                         else:
+                            extra_exog = None
+                            with suppress(Exception):
+                                fdf = st.session_state.get("features_df")
+                                if fdf is not None and not fdf.empty and "ad_effect_log" in fdf.columns:
+                                    extra_exog = fdf["ad_effect_log"]
                             fit = fit_piecewise_logistic(
                                 total_series=fit_series_source,
                                 breakpoints=breakpoints,
                                 events_df=st.session_state.get("events_df"),
+                                extra_exog=extra_exog,
                             )
                             st.session_state["pwlog_fit"] = fit
                             # Overlay fitted curve
@@ -1239,6 +1450,8 @@ def render_data_import() -> None:
                             c1.metric("K (capacity)", f"{int(fit.carrying_capacity):,}")
                             c2.metric("Segments (r)", ", ".join(f"{r:0.3f}" for r in fit.segment_growth_rates))
                             c3.metric("R² on ΔS", f"{fit.r2_on_deltas:0.3f}")
+                            if getattr(fit, "gamma_exog", None) is not None:
+                                st.caption(f"Exogenous effect (log ad): γ_exog={fit.gamma_exog:0.4f}")
 
                             # Forecast extension
                             if horizon_ahead > 0:
