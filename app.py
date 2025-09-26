@@ -8,7 +8,7 @@ from contextlib import suppress
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 import altair as alt
 import pandas as pd
@@ -732,16 +732,18 @@ def _collect_session_bundle(include_fit: bool, include_sim: bool) -> bytes:
         covariates = st.session_state.get("covariates_df")
         if covariates is not None and isinstance(covariates, pd.DataFrame) and not covariates.empty:
             cov_out = covariates.copy()
+            cov_out = cov_out.reset_index().rename(columns={cov_out.index.name or "index": "date"})
             with suppress(Exception):
-                cov_out["date"] = cov_out["date"].dt.date.astype(str)
+                cov_out["date"] = pd.to_datetime(cov_out["date"]).dt.date.astype(str)
             zf.writestr("covariates.csv", cov_out.to_csv(index=False))
 
         # features
         features = st.session_state.get("features_df")
         if features is not None and isinstance(features, pd.DataFrame) and not features.empty:
             feat_out = features.copy()
+            feat_out = feat_out.reset_index().rename(columns={feat_out.index.name or "index": "date"})
             with suppress(Exception):
-                feat_out["date"] = feat_out["date"].dt.date.astype(str)
+                feat_out["date"] = pd.to_datetime(feat_out["date"]).dt.date.astype(str)
             zf.writestr("features.csv", feat_out.to_csv(index=False))
 
         # fit (optional)
@@ -837,17 +839,18 @@ def _apply_session_bundle(file_like) -> None:
         # covariates
         with suppress(KeyError, Exception):
             cov = pd.read_csv(io.BytesIO(zf.read("covariates.csv")))
-            if "date" in cov.columns and "ad_spend" in cov.columns:
-                cov["date"] = pd.to_datetime(cov["date"])
-                cov = cov.set_index("date")["ad_spend"]
+            if {"date", "ad_spend"}.issubset(cov.columns):
+                cov["date"] = pd.to_datetime(cov["date"]).dt.to_period("M").dt.to_timestamp("M")
+                cov = cov.set_index("date").sort_index()
                 st.session_state["covariates_df"] = cov
 
         # features
         with suppress(KeyError, Exception):
             feat = pd.read_csv(io.BytesIO(zf.read("features.csv")))
-            if "date" in feat.columns and "pulse" in feat.columns and "step" in feat.columns:
-                feat["date"] = pd.to_datetime(feat["date"])
-                feat = feat.set_index("date")
+            need = {"date", "pulse", "step", "adstock", "ad_effect_log"}
+            if need.issubset(feat.columns):
+                feat["date"] = pd.to_datetime(feat["date"]).dt.to_period("M").dt.to_timestamp("M")
+                feat = feat.set_index("date").sort_index()
                 st.session_state["features_df"] = feat
 
 
@@ -935,13 +938,541 @@ def _compute_estimates(
 
 
 def render_data_import() -> None:
+    """
+    Stage 1–5: Import, preview, annotate, feature-build, quick-fit, diagnostics, and handoff.
+
+    Notes:
+    - Assumes external helpers exist: _collect_session_bundle, _apply_session_bundle, _get_state, _read_series,
+      detect_change_points, _format_date_badges, compute_segment_slopes, fit_piecewise_logistic,
+      forecast_piecewise_logistic, _compute_estimates.
+    - Uses st.session_state keys:
+      import_total, import_paid, observations_df, events_df, covariates_df, features_df,
+      adds_df, churn_df, pwlog_fit, switch_to_sim, est_window, horizon_months, ...
+    """
+
+    # ---------- Small internal utilities ----------
+    def _read_head(fh, has_header: bool, nrows: int = 5) -> pd.DataFrame:
+        """Read a tiny preview (keeps pointer intact for later full read)."""
+        try:
+            if fh.name.lower().endswith((".xlsx", ".xls")):
+                tmp = pd.read_excel(fh, header=0 if has_header else None, nrows=nrows)
+            else:
+                tmp = pd.read_csv(fh, header=0 if has_header else None, nrows=nrows)
+        finally:
+            with suppress(Exception):
+                fh.seek(0)
+        return tmp
+
+    def _upload_panel(
+        title: str,
+        help_hint: str,
+        key_prefix: str,
+        default_header: bool = False,
+    ) -> tuple[Optional[Any], bool, Optional[int], Optional[int]]:
+        """Shared UI for file upload + optional header + column choices."""
+        file_obj = st.file_uploader(title, type=["csv", "xlsx", "xls"], key=f"{key_prefix}_file", help=help_hint)
+        has_header = st.checkbox(
+            f"{key_prefix.capitalize()} file has header row", value=default_header, key=f"{key_prefix}_has_header"
+        )
+        date_sel: Optional[int] = 0
+        count_sel: Optional[int] = 1
+        if file_obj is not None:
+            try:
+                head = _read_head(file_obj, has_header, nrows=5)
+                ncols = head.shape[1]
+                date_sel = st.selectbox(
+                    f"{key_prefix.capitalize()}: date column (index)",
+                    list(range(ncols)),
+                    index=0,
+                    key=f"{key_prefix}_date_sel",
+                )
+                count_sel = st.selectbox(
+                    f"{key_prefix.capitalize()}: count column (index)",
+                    list(range(ncols)),
+                    index=min(1, max(ncols - 1, 0)),
+                    key=f"{key_prefix}_count_sel",
+                )
+            except Exception as e:
+                st.error(f"Could not read {key_prefix.capitalize()} file: {e}")
+                file_obj = None
+        return file_obj, has_header, date_sel, count_sel
+
+    def _plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, series_title: str) -> alt.Chart:
+        base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
+            x=alt.X("date:T", title="Date")
+        )
+        left_series = [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in plot_df.columns]
+        layers = []
+        if left_series:
+            left = (
+                base.transform_fold(left_series, as_=["Series", "Value"])
+                .mark_line(point=True)
+                .encode(
+                    y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
+                    color=alt.Color("Series:N", scale=alt.Scale(scheme="tableau10"), title=series_title),
+                    tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("Series:N"), alt.Tooltip("Value:Q")],
+                )
+            )
+            layers.append(left)
+        if use_dual_axis and ("Paid" in plot_df.columns):
+            right = (
+                base.transform_fold(["Paid"], as_=["Series", "Value"])
+                .mark_line(strokeDash=[4, 3], point=True)
+                .encode(
+                    y=alt.Y("Value:Q", axis=alt.Axis(title="Paid", orient="right"), scale=alt.Scale(zero=True)),
+                    color=alt.Color("Series:N", scale=alt.Scale(range=["#DB4437"]), title=series_title),
+                    tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("Series:N"), alt.Tooltip("Value:Q")],
+                )
+            )
+            layers.append(right)
+
+        # Overlay event markers if present
+        ev = st.session_state.get("events_df")
+        if ev is not None and not ev.empty:
+            ev2 = ev.dropna(subset=["date"]).copy()
+            if not ev2.empty:
+                with suppress(Exception):
+                    ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                markers = (
+                    alt.Chart(ev2)
+                    .mark_rule(color="#8e44ad", size=3)
+                    .encode(x="date:T", tooltip=["date:T", "type:N", "notes:N", "cost:Q"])
+                )
+                layers.append(markers)
+
+        chart = alt.layer(*layers).properties(height=260)
+        if use_dual_axis and ("Paid" in plot_df.columns):
+            chart = chart.resolve_scale(y="independent")
+        return chart
+
+    def _emit_observations(plot_df: pd.DataFrame) -> None:
+        """Stage 1 output: observations_df (current granularity)."""
+        idx = plot_df.index
+        total = plot_df.get("Total")
+        paid = plot_df.get("Paid")
+        if total is not None and paid is not None:
+            free = (total.astype(float) - paid.astype(float)).clip(lower=0)
+        elif total is not None:
+            free = total.astype(float) - float(_get_state("start_premium", 0))
+        else:
+            free = pd.Series(index=idx, dtype=float)
+
+        obs = pd.DataFrame(
+            {
+                "active_total": (total.astype(float) if total is not None else pd.Series(index=idx, dtype=float)),
+                "active_paid": (paid.astype(float) if paid is not None else pd.Series(index=idx, dtype=float)),
+                "active_free": free.astype(float),
+                "is_imputed": False,
+            },
+            index=idx,
+        )
+        obs.index.name = "date"
+        st.session_state["observations_df"] = obs
+        with st.expander("Stage 1 output: observations_df", expanded=False):
+            st.dataframe(obs.reset_index(), use_container_width=True)
+            st.download_button(
+                "Download observations.csv",
+                data=obs.reset_index().to_csv(index=False).encode("utf-8"),
+                file_name="observations.csv",
+                mime="text/csv",
+            )
+
+    def _trend_detection(plot_df: pd.DataFrame, target_col: Optional[str]) -> list[int]:
+        st.caption("Detected trend changes help annotate what happened (e.g., shout-outs, ad spend).")
+        if target_col is None:
+            return []
+        max_bkps = st.slider("Max changes to detect", 0, 8, 3, 1, key="max_changes_detect")
+        try:
+            bkps = detect_change_points(plot_df[target_col], max_changes=max_bkps)
+        except Exception:
+            bkps = []
+
+        if bkps:
+            s_idx = plot_df[target_col].dropna().index
+            dates = [pd.to_datetime(s_idx[i]) for i in bkps if i < len(s_idx)]
+            st.markdown(f"**Detected change dates (on {target_col}):**")
+            st.markdown(_format_date_badges(dates), unsafe_allow_html=True)
+            st.caption("Tip: To adjust these, use the draggable timeline below (purple bars).")
+            if st.button("Add detected change dates to Events"):
+                try:
+                    change_dates = [s_idx[i - 1] if i > 0 else s_idx[i] for i in bkps]
+                    seeded = pd.DataFrame(
+                        {
+                            "date": [pd.to_datetime(d).date() for d in change_dates],
+                            "type": ["Change"] * len(change_dates),
+                            "notes": [f"Detected change in {target_col}"] * len(change_dates),
+                            "cost": [0.0] * len(change_dates),
+                        }
+                    )
+                    existing = st.session_state.get("events_df")
+                    merged = (
+                        pd.concat([existing, seeded], ignore_index=True)
+                        if (existing is not None and not existing.empty)
+                        else seeded
+                    )
+                    st.session_state["events_df"] = merged
+                    st.success("Added detected change dates to Events.")
+                except Exception:
+                    st.info("Could not add detected dates. Try again after loading data.")
+        return bkps or []
+
+    def _events_editor() -> None:
+        st.subheader("Stage 2: Events & annotations")
+        st.caption("Track shout-outs, ad campaigns, launches, etc. Dates must match the series timeline.")
+        default_events = pd.DataFrame([{"date": None, "type": "Ad spend", "notes": "", "cost": 0.0}])
+        events_df = st.session_state.get("events_df", default_events)
+
+        with st.form("events_form"):
+            edited = st.data_editor(
+                events_df,
+                num_rows="dynamic",
+                column_config={
+                    "date": st.column_config.DateColumn("Date"),
+                    "type": st.column_config.SelectboxColumn(
+                        "Type", options=["Ad spend", "Shout-out", "Other"], width="medium"
+                    ),
+                    "notes": st.column_config.TextColumn("Notes", width="large"),
+                    "cost": st.column_config.NumberColumn(
+                        "Cost ($)", step=10.0, min_value=0.0, format="%.2f", help="For Ad spend ROI calc"
+                    ),
+                },
+                use_container_width=True,
+                key="events_editor",
+            )
+            submitted = st.form_submit_button("Apply events changes")
+        if submitted:
+            with suppress(Exception):
+                edited["cost"] = pd.to_numeric(edited["cost"], errors="coerce")
+        st.session_state["events_df"] = edited
+
+    def _events_features(plot_df: pd.DataFrame) -> None:
+        with st.expander("Stage 2: Events & Features (monthly)", expanded=False):
+            st.caption("Encodes pulse/step features from Events and optional ad spend adstock + log transform.")
+            cov_col1, cov_col2 = st.columns(2)
+            with cov_col1:
+                ad_file = st.file_uploader(
+                    "Optional: Ad spend CSV (date, spend)", type=["csv", "xlsx", "xls"], key="ad_csv"
+                )
+            with cov_col2:
+                lam = st.slider("Adstock lambda (carryover)", 0.0, 0.99, 0.5, 0.01)
+                theta = st.number_input("Log transform theta", min_value=1.0, value=500.0, step=50.0)
+
+            monthly_index = plot_df.index
+            pulse = pd.Series(0.0, index=monthly_index, name="pulse")
+            step = pd.Series(0.0, index=monthly_index, name="step")
+
+            ev_src = st.session_state.get("events_df")
+            if ev_src is not None and not ev_src.empty:
+                ev2 = ev_src.dropna(subset=["date"]).copy()
+                with suppress(Exception):
+                    ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                for _, r in ev2.iterrows():
+                    d = r.get("date")
+                    if pd.isna(d) or d not in monthly_index:
+                        continue
+                    cost = float(r.get("cost", 1.0) or 1.0)
+                    kind = str(r.get("type", ""))
+                    weight = cost if kind.lower() in {"ad spend", "ad"} else 1.0
+                    pulse.loc[d] += float(weight)
+                    step.loc[d:] += 1.0
+
+            # Optional ad spend covariate
+            ad_spend = pd.Series(0.0, index=monthly_index, name="ad_spend")
+            if ad_file is not None:
+                try:
+                    if ad_file.name.lower().endswith((".xlsx", ".xls")):
+                        ad_df = pd.read_excel(ad_file)
+                    else:
+                        ad_df = pd.read_csv(ad_file)
+                    if {"date", "spend"}.issubset(ad_df.columns):
+                        ad_df = ad_df.assign(date=lambda d: pd.to_datetime(d["date"]))
+                        ad_df = ad_df.dropna(subset=["date"])
+                        ad_df["date"] = ad_df["date"].dt.to_period("M").dt.to_timestamp("M")
+                        ad_df = ad_df.groupby("date", as_index=True)["spend"].sum().sort_index()
+                        ad_spend = ad_df.reindex(monthly_index).fillna(0.0)
+                except Exception:
+                    st.info("Could not parse ad spend CSV; expecting columns: date, spend")
+
+            # Adstock + log transform
+            adstock = pd.Series(0.0, index=monthly_index, name="adstock")
+            if not ad_spend.empty:
+                prev = 0.0
+                vals: list[float] = []
+                for v in ad_spend.to_list():
+                    s_val = float(v) + float(lam) * float(prev)
+                    vals.append(s_val)
+                    prev = s_val
+                adstock = pd.Series(vals, index=monthly_index, name="adstock")
+
+            ad_effect_log = pd.Series(
+                (adstock / max(theta, 1e-9)).add(1.0).apply(lambda x: float(math.log(x))),
+                index=monthly_index,
+                name="ad_effect_log",
+            )
+
+            covariates_df = pd.DataFrame({"ad_spend": ad_spend})
+            features_df = pd.DataFrame(
+                {"pulse": pulse, "step": step, "adstock": adstock, "ad_effect_log": ad_effect_log}
+            )
+
+            st.session_state["covariates_df"] = covariates_df
+            st.session_state["features_df"] = features_df
+
+            st.markdown("**Outputs**: `events_df` (above), `covariates_df`, `features_df`.")
+            st.dataframe(features_df.reset_index(), use_container_width=True)
+            dcol1, dcol2 = st.columns(2)
+            with dcol1:
+                st.download_button(
+                    "Download covariates.csv",
+                    data=covariates_df.reset_index().to_csv(index=False).encode("utf-8"),
+                    file_name="covariates.csv",
+                    mime="text/csv",
+                )
+            with dcol2:
+                st.download_button(
+                    "Download features.csv",
+                    data=features_df.reset_index().to_csv(index=False).encode("utf-8"),
+                    file_name="features.csv",
+                    mime="text/csv",
+                )
+
+    def _adds_and_churn(plot_df: pd.DataFrame) -> None:
+        with st.expander("Stage 3: Adds & Churn (monthly)", expanded=False):
+            st.caption("Totals-only path: derive gross adds from net deltas using churn rate heuristics.")
+            total_s = plot_df.get("Total") if "Total" in plot_df.columns else None
+            paid_s = plot_df.get("Paid") if "Paid" in plot_df.columns else None
+            free_s = (
+                (total_s.astype(float) - paid_s.astype(float)).clip(lower=0)
+                if (total_s is not None and paid_s is not None)
+                else None
+            )
+
+            c1, c2 = st.columns(2)
+            with c1:
+                churn_free_est = st.number_input(
+                    "Monthly churn rate (free)",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=float(_get_state("churn_free", 0.0)),
+                    step=0.001,
+                    format="%0.3f",
+                )
+            with c2:
+                churn_paid_est = st.number_input(
+                    "Monthly churn rate (paid)",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=float(_get_state("churn_prem", 0.0)),
+                    step=0.001,
+                    format="%0.3f",
+                )
+
+            adds_rows, churn_rows = [], []
+            idx = plot_df.index
+            for i, d in enumerate(idx):
+                if i == 0:
+                    continue
+                prev_d = idx[i - 1]
+                if free_s is not None:
+                    free_prev, free_now = float(free_s.loc[prev_d]), float(free_s.loc[d])
+                    canc_free = max(free_prev * churn_free_est, 0.0)
+                    adds_free = max((free_now - free_prev) + canc_free, 0.0)
+                else:
+                    canc_free = float("nan")
+                    adds_free = float("nan")
+
+                if paid_s is not None:
+                    paid_prev, paid_now = float(paid_s.loc[prev_d]), float(paid_s.loc[d])
+                    canc_paid = max(paid_prev * churn_paid_est, 0.0)
+                    adds_paid = max((paid_now - paid_prev) + canc_paid, 0.0)
+                else:
+                    canc_paid = float("nan")
+                    adds_paid = float("nan")
+
+                adds_rows.append({"date": d, "gross_adds_free": adds_free, "gross_adds_paid": adds_paid})
+                churn_rows.append({"date": d, "cancels_free": canc_free, "cancels_paid": canc_paid})
+
+            if adds_rows:
+                adds_df = pd.DataFrame(adds_rows).set_index("date")
+                churn_df = pd.DataFrame(churn_rows).set_index("date")
+                st.session_state["adds_df"] = adds_df
+                st.session_state["churn_df"] = churn_df
+                st.markdown("**Outputs**: `adds_df`, `churn_df` (monthly, heuristics).")
+                st.dataframe(adds_df.reset_index(), use_container_width=True)
+                st.dataframe(churn_df.reset_index(), use_container_width=True)
+                b1, b2 = st.columns(2)
+                with b1:
+                    st.download_button(
+                        "Download adds.csv",
+                        data=adds_df.reset_index().to_csv(index=False).encode("utf-8"),
+                        file_name="adds.csv",
+                        mime="text/csv",
+                    )
+                with b2:
+                    st.download_button(
+                        "Download churn.csv",
+                        data=churn_df.reset_index().to_csv(index=False).encode("utf-8"),
+                        file_name="churn.csv",
+                        mime="text/csv",
+                    )
+
+    def _quick_fit(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
+        st.subheader("Stage 4: Model fitting (Quick Fit)")
+        st.caption(
+            "Fits on Total (preferred) or Free if Total is unavailable. Uses detected change points as segments."
+        )
+        horizon_ahead = st.slider("Forecast months ahead", 0, 36, 12, 1)
+        if st.button("Fit model and overlay"):
+            try:
+                fit_series_source = plot_df.get("Total") if "Total" in plot_df.columns else plot_df.get("Free")
+                if fit_series_source is None or fit_series_source.empty:
+                    st.info("Need Total or Free series to fit.")
+                    return
+                fit = fit_piecewise_logistic(
+                    total_series=fit_series_source, breakpoints=breakpoints, events_df=st.session_state.get("events_df")
+                )
+                st.session_state["pwlog_fit"] = fit
+
+                overlay_df = pd.DataFrame(
+                    {"Actual": fit_series_source, "Fitted": fit.fitted_series.reindex(fit_series_source.index)}
+                )
+                base_overlay = alt.Chart(overlay_df.reset_index().rename(columns={"index": "date"})).encode(
+                    x=alt.X("date:T", title="Date")
+                )
+                actual_line = (
+                    base_overlay.transform_fold(["Actual"], as_=["Series", "Value"])
+                    .mark_line()
+                    .encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#1f77b4"])))
+                )
+                fitted_line = (
+                    base_overlay.transform_fold(["Fitted"], as_=["Series", "Value"])
+                    .mark_line(strokeDash=[5, 3])
+                    .encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#ff7f0e"])))
+                )
+                st.altair_chart(alt.layer(actual_line, fitted_line).properties(height=240), use_container_width=True)
+
+                c1, c2, c3 = st.columns(3)
+                c1.metric("K (capacity)", f"{int(fit.carrying_capacity):,}")
+                c2.metric("Segments (r)", ", ".join(f"{r:0.3f}" for r in fit.segment_growth_rates))
+                c3.metric("R² on ΔS", f"{fit.r2_on_deltas:0.3f}")
+                if getattr(fit, "gamma_exog", None) is not None:
+                    st.caption(f"Exogenous effect (log ad): γ_exog={fit.gamma_exog:0.4f}")
+
+                if horizon_ahead > 0:
+                    last_val = float(fit.fitted_series.iloc[-1])
+                    last_r = float(fit.segment_growth_rates[-1]) if fit.segment_growth_rates else 0.0
+                    fc = forecast_piecewise_logistic(
+                        last_value=last_val,
+                        months_ahead=horizon_ahead,
+                        carrying_capacity=fit.carrying_capacity,
+                        segment_growth_rate=last_r,
+                        gamma_step_level=fit.gamma_step,
+                    )
+                    fc_index = pd.date_range(
+                        fit.fitted_series.index[-1] + pd.offsets.MonthEnd(1), periods=horizon_ahead, freq="M"
+                    )
+                    fc_df = pd.DataFrame({"Forecast": fc}, index=fc_index)
+                    merged = pd.concat([overlay_df, fc_df], axis=0)
+                    chart_fc = (
+                        alt.Chart(merged.reset_index().rename(columns={"index": "date"}))
+                        .transform_fold(["Actual", "Fitted", "Forecast"], as_=["Series", "Value"])
+                        .mark_line()
+                        .encode(x=alt.X("date:T"), y="Value:Q", color="Series:N")
+                        .properties(height=240)
+                    )
+                    st.altair_chart(chart_fc, use_container_width=True)
+            except Exception as e:
+                st.error(f"Model fit failed: {e}")
+
+    def _tail_view(
+        plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, target_col: Optional[str], breakpoints: list[int]
+    ) -> None:
+        st.subheader("Stage 5: Diagnostics (delta view)")
+        st.bar_chart(plot_df.diff().fillna(0))
+
+        window_default = int(_get_state("est_window", 6))
+        window = st.slider("Estimation window (last N months)", 3, 12, window_default, 1, key="est_window")
+        st.caption("This window recomputes trailing medians for the estimates and the tail chart below.")
+
+        st.subheader(f"Last {window} months (tail)")
+        tail_df = plot_df.tail(window)
+
+        series_title = "Series (Paid is dashed)" if (use_dual_axis and ("Paid" in tail_df.columns)) else "Series"
+        base_chart = _plot_series(
+            tail_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title
+        )
+
+        # Segment overlays intersecting tail
+        if target_col is not None and breakpoints:
+            try:
+                full_s = plot_df[target_col].dropna()
+                segs = compute_segment_slopes(full_s, breakpoints)
+                tail_start, tail_end = tail_df.index[0], tail_df.index[-1]
+                segs_t = [seg for seg in segs if (seg.end_date >= tail_start and seg.start_date <= tail_end)]
+                fit_rows_t = []
+                for seg in segs_t:
+                    xs = pd.date_range(max(seg.start_date, tail_start), min(seg.end_date, tail_end), freq="M")
+                    start_val = float(full_s.loc[seg.start_date])
+                    for i, d in enumerate(xs):
+                        fit_rows_t.append({"date": d, "Fit": start_val + seg.slope_per_month * i})
+                if fit_rows_t:
+                    fit_df_t = pd.DataFrame(fit_rows_t)
+                    fit_t = alt.Chart(fit_df_t).mark_line(color="#7f8c8d").encode(x="date:T", y="Fit:Q")
+                    base_chart = alt.layer(base_chart, fit_t).resolve_scale(y="independent").properties(height=240)
+            except Exception:
+                pass
+
+        st.altair_chart(base_chart, use_container_width=True)
+
+    def _metrics_and_apply(all_series, paid_series, net_only: bool) -> None:
+        estimates = _compute_estimates(all_series, paid_series, int(_get_state("est_window", 6)))
+
+        cols = st.columns(3)
+        if "start_free" in estimates:
+            cols[0].metric("Starting free (latest)", f"{estimates['start_free']:,}")
+        if "start_premium" in estimates:
+            cols[1].metric("Starting premium (latest)", f"{estimates['start_premium']:,}")
+        if "organic_growth" in estimates:
+            cols[2].metric("Net free growth (monthly)", f"{estimates['organic_growth']*100:0.2f}%")
+
+        cols2 = st.columns(3)
+        if "conv_ongoing" in estimates:
+            cols2[0].metric("Ongoing premium conversion (proxy)", f"{estimates['conv_ongoing']*100:0.3f}%")
+        if not net_only:
+            cols2[1].metric("Free churn", f"{float(estimates.get('churn_free', 0.0))*100:0.2f}%")
+            cols2[2].metric("Premium churn", f"{float(estimates.get('churn_prem', 0.0))*100:0.2f}%")
+        else:
+            cols2[1].metric("Net growth (includes churn)", "—")
+            cols2[2].metric(" ", " ")
+
+        st.caption(
+            "Notes: From totals alone we can compute net growth and a conversion proxy (when both series present)."
+            " Churn and CAC need more detail."
+        )
+
+        if st.button("Apply estimates to Simulator"):
+            for k, v in estimates.items():
+                st.session_state[k] = v
+            if net_only:
+                st.session_state["churn_free"] = 0.0
+                st.session_state["churn_prem"] = 0.0
+            st.session_state["ad_stage1"] = 0.0
+            st.session_state["ad_stage2"] = 0.0
+            st.session_state["ad_const"] = 0.0
+            st.session_state["spend_mode_index"] = 1  # Constant
+            st.session_state["conv_new"] = 0.0
+            st.session_state["horizon_months"] = max(int(_get_state("horizon_months", 60)), 24)
+            st.session_state["switch_to_sim"] = True
+            st.success("Applied. Switching to Simulator…")
+            st.rerun()
+
+    # ---------- UI: Header + quick save/load ----------
     st.subheader("Stage 1: Import Substack exports (time series)")
     st.caption(
-        "Upload two files: All subscribers over time, and Paid subscribers over time. "
-        "No headers by default: first column is date, second is count."
+        "Upload two files: All subscribers over time, and Paid subscribers over time."
+        " No headers by default: first column is date, second is count."
     )
 
-    # Quick export/import access here for convenience
     with st.expander("Save / Load (quick access)", expanded=False):
         has_fit_i = st.session_state.get("pwlog_fit") is not None
         include_fit_i = st.checkbox("Include model fit", value=bool(has_fit_i), key="import_include_fit")
@@ -964,76 +1495,38 @@ def render_data_import() -> None:
             except Exception as e:
                 st.error(f"Failed to load bundle: {e}")
 
+    # ---------- Upload inputs (All / Paid) ----------
     c_all, c_paid = st.columns(2)
-
     with c_all:
-        all_file = st.file_uploader(
+        all_file, all_has_header, all_date_sel, all_count_sel = _upload_panel(
             "All subscribers file (CSV/XLSX, often downloaded as `[blogname]_emails_[date].csv`)",
-            type=["csv", "xlsx", "xls"],
-            key="all_file",
+            help_hint="Pick the time series of all subscribers over time.",
+            key_prefix="all",
+            default_header=False,
         )
-        all_has_header = st.checkbox("All file has header row", value=False, key="all_has_header")
-        all_date_sel: Optional[int] = 0
-        all_count_sel: Optional[int] = 1
-        if all_file is not None:
-            try:
-                if all_file.name.lower().endswith((".xlsx", ".xls")):
-                    tmp = pd.read_excel(all_file, header=0 if all_has_header else None, nrows=5)
-                else:
-                    tmp = pd.read_csv(all_file, header=0 if all_has_header else None, nrows=5)
-                # Reset pointer for later full read
-                all_file.seek(0)
-                ncols = tmp.shape[1]
-                all_date_sel = st.selectbox("All: date column (index)", list(range(ncols)), index=0, key="all_date_sel")
-                all_count_sel = st.selectbox(
-                    "All: count column (index)", list(range(ncols)), index=min(1, ncols - 1), key="all_count_sel"
-                )
-            except Exception as e:
-                st.error(f"Could not read All file: {e}")
-                all_file = None
-
     with c_paid:
-        paid_file = st.file_uploader(
+        paid_file, paid_has_header, paid_date_sel, paid_count_sel = _upload_panel(
             "Paid subscribers file (CSV/XLSX, often downloaded as `[blogname]_subscribers_[date].csv`)",
-            type=["csv", "xlsx", "xls"],
-            key="paid_file",
+            help_hint="Pick the time series of paid subscribers over time.",
+            key_prefix="paid",
+            default_header=False,
         )
-        paid_has_header = st.checkbox("Paid file has header row", value=False, key="paid_has_header")
-        paid_date_sel: Optional[int] = 0
-        paid_count_sel: Optional[int] = 1
-        if paid_file is not None:
-            try:
-                if paid_file.name.lower().endswith((".xlsx", ".xls")):
-                    tmp2 = pd.read_excel(paid_file, header=0 if paid_has_header else None, nrows=5)
-                else:
-                    tmp2 = pd.read_csv(paid_file, header=0 if paid_has_header else None, nrows=5)
-                paid_file.seek(0)
-                ncols2 = tmp2.shape[1]
-                paid_date_sel = st.selectbox(
-                    "Paid: date column (index)", list(range(ncols2)), index=0, key="paid_date_sel"
-                )
-                paid_count_sel = st.selectbox(
-                    "Paid: count column (index)", list(range(ncols2)), index=min(1, ncols2 - 1), key="paid_count_sel"
-                )
-            except Exception as e:
-                st.error(f"Could not read Paid file: {e}")
-                paid_file = None
 
-    # Proceed if at least one file is present
+    # ---------- Main flow only if at least one file present ----------
     if all_file is not None or paid_file is not None:
-        # We'll show the window slider near the tail chart it affects
-        window = int(_get_state("est_window", 6))
         net_only = st.checkbox("Use net-only growth (set churn to 0)", value=True)
         debug_mode = st.checkbox("Enable debug logging", value=True, help="Adds console logs and inline diagnostics.")
-        try:
-            all_series = None
-            paid_series = None
-            if all_file is not None:
-                all_series = _read_series(all_file, all_has_header, all_date_sel, all_count_sel)
-            if paid_file is not None:
-                paid_series = _read_series(paid_file, paid_has_header, paid_date_sel, paid_count_sel)
 
-            # Preview charts + trend detection
+        try:
+            all_series = (
+                _read_series(all_file, all_has_header, all_date_sel, all_count_sel) if all_file is not None else None
+            )
+            paid_series = (
+                _read_series(paid_file, paid_has_header, paid_date_sel, paid_count_sel)
+                if paid_file is not None
+                else None
+            )
+
             plot_df = pd.DataFrame()
             if all_series is not None and not all_series.empty:
                 plot_df["Total"] = all_series
@@ -1047,615 +1540,61 @@ def render_data_import() -> None:
                     f"paid_series={'None' if paid_series is None else len(paid_series)}; "
                     f"plot_df_cols={list(plot_df.columns)}"
                 )
+
             if not plot_df.empty:
                 if "Total" in plot_df.columns and "Paid" in plot_df.columns:
                     plot_df["Free"] = plot_df["Total"].astype(float) - plot_df["Paid"].astype(float)
+
                 st.subheader("Imported series")
                 st.caption("Mode: Paid and unpaid" if "Paid" in plot_df.columns else "Mode: Unpaid only")
-                # Stage 1 output: build observations_df (current granularity)
-                try:
-                    idx = plot_df.index
-                    total = plot_df.get("Total")
-                    paid = plot_df.get("Paid")
-                    free = None
-                    if total is not None and paid is not None:
-                        free = (total.astype(float) - paid.astype(float)).clip(lower=0)
-                    elif total is not None:
-                        free = total.astype(float) - float(_get_state("start_premium", 0))
-                    obs = pd.DataFrame(
-                        {
-                            "active_total": (
-                                total.astype(float) if total is not None else pd.Series(index=idx, dtype=float)
-                            ),
-                            "active_paid": (
-                                paid.astype(float) if paid is not None else pd.Series(index=idx, dtype=float)
-                            ),
-                            "active_free": (
-                                free.astype(float) if free is not None else pd.Series(index=idx, dtype=float)
-                            ),
-                            "is_imputed": False,
-                        },
-                        index=idx,
-                    )
-                    obs.index.name = "date"
-                    st.session_state["observations_df"] = obs
-                    with st.expander("Stage 1 output: observations_df", expanded=False):
-                        st.dataframe(obs.reset_index(), use_container_width=True)
-                        st.download_button(
-                            "Download observations.csv",
-                            data=obs.reset_index().to_csv(index=False).encode("utf-8"),
-                            file_name="observations.csv",
-                            mime="text/csv",
-                        )
-                except Exception:
-                    pass
-                # Dual-axis toggle for visibility when Paid is much smaller
+
+                # Stage 1 output: observations_df
+                with suppress(Exception):
+                    _emit_observations(plot_df)
+
+                # Chart controls
                 use_dual_axis = st.checkbox(
                     "Use separate right axis for Paid",
                     value=True,
                     help="Plots Total/Free on left axis and Paid on right axis for readability.",
                 )
-                # Option to hide/show Total line by default (on when Paid missing)
                 default_show_total = "Paid" not in plot_df.columns
                 show_total = st.checkbox("Show Total line", value=default_show_total)
-                # Legend title reflects whether Paid is plotted
-                has_paid = "Paid" in plot_df.columns
-                plotting_paid = bool(use_dual_axis) and has_paid
-                series_title = "Series (Paid is dashed)" if plotting_paid else "Series"
-                # Altair chart
-                base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
-                    x=alt.X("date:T", title="Date")
+
+                series_title = (
+                    "Series (Paid is dashed)" if (use_dual_axis and ("Paid" in plot_df.columns)) else "Series"
                 )
-
-                left = (
-                    base.transform_fold(
-                        [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in plot_df.columns],
-                        as_=["Series", "Value"],
-                    )
-                    .mark_line(point=True)
-                    .encode(
-                        y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
-                        color=alt.Color(
-                            "Series:N",
-                            scale=alt.Scale(scheme="tableau10"),
-                            title=series_title,
-                        ),
-                        tooltip=[
-                            alt.Tooltip("date:T", title="Date"),
-                            alt.Tooltip("Series:N", title="Series"),
-                            alt.Tooltip("Value:Q", title="Value"),
-                        ],
-                    )
+                chart = _plot_series(
+                    plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title
                 )
-
-                layers = [left]
-                if use_dual_axis and ("Paid" in plot_df.columns):
-                    right = (
-                        base.transform_fold(["Paid"], as_=["Series", "Value"])
-                        .mark_line(strokeDash=[4, 3], point=True)
-                        .encode(
-                            y=alt.Y(
-                                "Value:Q",
-                                axis=alt.Axis(title="Paid", orient="right"),
-                                scale=alt.Scale(zero=True),
-                            ),
-                            color=alt.Color(
-                                "Series:N",
-                                scale=alt.Scale(range=["#DB4437"]),
-                                title=series_title,
-                            ),
-                            tooltip=[
-                                alt.Tooltip("date:T", title="Date"),
-                                alt.Tooltip("Series:N", title="Series"),
-                                alt.Tooltip("Value:Q", title="Value"),
-                            ],
-                        )
-                    )
-                    layers.append(right)
-
-                # Overlay event markers on main chart if present
-                if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
-                    ev2 = ev.dropna(subset=["date"]).copy()
-                    if not ev2.empty:
-                        ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
-                        markers = (
-                            alt.Chart(ev2)
-                            .mark_rule(color="#8e44ad", size=3)
-                            .encode(
-                                x="date:T",
-                                tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
-                            )
-                        )
-                        layers.append(markers)
-                chart = alt.layer(*layers)
-                if use_dual_axis and ("Paid" in plot_df.columns):
-                    chart = chart.resolve_scale(y="independent")
-                chart = chart.properties(height=260)
                 st.altair_chart(chart, use_container_width=True)
 
-                # Change-point detection (on Total if present, otherwise Free)
-                st.caption("Detected trend changes help annotate what happened (e.g., shout‑outs, ad spend).")
+                # Trend detection on Total if present else Free
                 target_col = "Total" if "Total" in plot_df.columns else ("Free" if "Free" in plot_df.columns else None)
-                breakpoints: list[int] = []
-                if target_col is not None:
-                    max_bkps = st.slider(
-                        "Max changes to detect",
-                        0,
-                        8,
-                        3,
-                        1,
-                        key="max_changes_detect",
-                    )
-                    try:
-                        breakpoints = detect_change_points(plot_df[target_col], max_changes=max_bkps)
-                    except Exception:
-                        breakpoints = []
-                if breakpoints:
-                    s_idx = plot_df[target_col].dropna().index
-                    dates = [pd.to_datetime(s_idx[i]) for i in breakpoints if i < len(s_idx)]
-                    st.markdown("**Detected change dates (on %s):**" % target_col)
-                    st.markdown(_format_date_badges(dates), unsafe_allow_html=True)
-                    st.caption("Tip: To adjust these, use the draggable timeline below (purple bars).")
-                    # Offer to seed events table with detected dates
-                    if st.button("Add detected change dates to Events"):
-                        try:
-                            s_idx = plot_df[target_col].dropna().index
-                            change_dates = [s_idx[i - 1] if i > 0 else s_idx[i] for i in breakpoints]
-                            seeded = pd.DataFrame(
-                                {
-                                    "date": [pd.to_datetime(d).date() for d in change_dates],
-                                    "type": ["Change"] * len(change_dates),
-                                    "notes": [f"Detected change in {target_col}"] * len(change_dates),
-                                    "cost": [0.0] * len(change_dates),
-                                }
-                            )
-                            existing = st.session_state.get("events_df")
-                            if existing is not None and not existing.empty:
-                                merged = pd.concat([existing, seeded], ignore_index=True)
-                            else:
-                                merged = seeded
-                            st.session_state["events_df"] = merged
-                            st.success("Added detected change dates to Events.")
-                        except Exception:
-                            st.info("Could not add detected dates. Try again after loading data.")
+                breakpoints = _trend_detection(plot_df, target_col)
 
-                # Stage 2: Events & annotations
-                st.subheader("Stage 2: Events & annotations")
-                st.caption("Track shout-outs, ad campaigns, launches, etc. Dates must match the series timeline.")
-                default_events = pd.DataFrame(
-                    [
-                        {"date": None, "type": "Ad spend", "notes": "", "cost": 0.0},
-                    ]
+                # Stage 2: Events
+                _events_editor()
+                _events_features(plot_df)
+
+                # Stage 3: Adds & Churn
+                _adds_and_churn(plot_df)
+
+                # Stage 4: Quick Fit
+                _quick_fit(plot_df, breakpoints)
+
+                # Stage 5: Diagnostics + Tail view
+                _tail_view(
+                    plot_df,
+                    use_dual_axis=use_dual_axis,
+                    show_total=show_total,
+                    target_col=target_col,
+                    breakpoints=breakpoints,
                 )
-                events_df = st.session_state.get("events_df", default_events)
-                with st.form("events_form"):
-                edited = st.data_editor(
-                    events_df,
-                    num_rows="dynamic",
-                    column_config={
-                        "date": st.column_config.DateColumn("Date"),
-                        "type": st.column_config.SelectboxColumn(
-                            "Type", options=["Ad spend", "Shout-out", "Other"], width="medium"
-                        ),
-                        "notes": st.column_config.TextColumn("Notes", width="large"),
-                            "cost": st.column_config.NumberColumn(
-                                "Cost ($)", step=10.0, min_value=0.0, format="%.2f", help="For Ad spend ROI calc"
-                            ),
-                    },
-                    use_container_width=True,
-                    key="events_editor",
-                )
-                    submitted_events = st.form_submit_button("Apply events changes")
-                if submitted_events:
-                    # Ensure numeric dtype for cost to prevent UI resets
-                    with suppress(Exception):
-                        edited["cost"] = pd.to_numeric(edited["cost"], errors="coerce")
-                st.session_state["events_df"] = edited
 
-                # Stage 2: Build covariates/features (monthly) from events and optional ad spend upload
-                with st.expander("Stage 2: Events & Features (monthly)", expanded=False):
-                    st.caption("Encodes pulse/step features from Events and optional ad spend adstock + log transform.")
-                    cov_col1, cov_col2 = st.columns(2)
-                    with cov_col1:
-                        ad_file = st.file_uploader(
-                            "Optional: Ad spend CSV (date, spend)", type=["csv", "xlsx", "xls"], key="ad_csv"
-                        )
-                    with cov_col2:
-                        lam = st.slider("Adstock lambda (carryover)", 0.0, 0.99, 0.5, 0.01)
-                        theta = st.number_input("Log transform theta", min_value=1.0, value=500.0, step=50.0)
+            # Summary metrics + apply to simulator
+            _metrics_and_apply(all_series, paid_series, net_only=net_only)
 
-                    # Determine monthly index from imported series
-                    monthly_index = plot_df.index
-                    pulse = pd.Series(0.0, index=monthly_index, name="pulse")
-                    step = pd.Series(0.0, index=monthly_index, name="step")
-                    ev_src = st.session_state.get("events_df")
-                    if ev_src is not None and not ev_src.empty:
-                        ev2 = ev_src.dropna(subset=["date"]).copy()
-                        with suppress(Exception):
-                            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
-                        for _, r in ev2.iterrows():
-                            d = r.get("date")
-                            if pd.isna(d) or d not in monthly_index:
-                                continue
-                            cost = float(r.get("cost", 1.0) or 1.0)
-                            kind = str(r.get("type", ""))
-                            # Pulse weight: cost for Ad spend, 1.0 otherwise
-                            weight = cost if kind.lower() in {"ad spend", "ad"} else 1.0
-                            pulse.loc[d] += float(weight)
-                            # Step from event month onward
-                            step.loc[d:] += 1.0
-
-                    # Optional ad spend covariate
-                    ad_spend = pd.Series(0.0, index=monthly_index, name="ad_spend")
-                    if ad_file is not None:
-                        try:
-                            if ad_file.name.lower().endswith((".xlsx", ".xls")):
-                                ad_df = pd.read_excel(ad_file)
-                            else:
-                                ad_df = pd.read_csv(ad_file)
-                            if {"date", "spend"}.issubset(ad_df.columns):
-                                ad_df = ad_df.assign(date=lambda d: pd.to_datetime(d["date"]))
-                                ad_df = ad_df.dropna(subset=["date"])
-                                ad_df["date"] = ad_df["date"].dt.to_period("M").dt.to_timestamp("M")
-                                ad_df = ad_df.groupby("date", as_index=True)["spend"].sum().sort_index()
-                                ad_spend = ad_df.reindex(monthly_index).fillna(0.0)
-                        except Exception:
-                            st.info("Could not parse ad spend CSV; expecting columns: date, spend")
-
-                    # Adstock and log transform
-                    adstock = pd.Series(0.0, index=monthly_index, name="adstock")
-                    if not ad_spend.empty:
-                        prev = 0.0
-                        vals: list[float] = []
-                        for v in ad_spend.to_list():
-                            s_val = float(v) + float(lam) * float(prev)
-                            vals.append(s_val)
-                            prev = s_val
-                        adstock = pd.Series(vals, index=monthly_index, name="adstock")
-                    ad_effect_log = pd.Series(
-                        (adstock / max(theta, 1e-9)).add(1.0).apply(lambda x: float(math.log(x))),
-                        index=monthly_index,
-                        name="ad_effect_log",
-                    )
-
-                    covariates_df = pd.DataFrame({"ad_spend": ad_spend})
-                    features_df = pd.DataFrame(
-                        {"pulse": pulse, "step": step, "adstock": adstock, "ad_effect_log": ad_effect_log}
-                    )
-
-                    st.session_state["covariates_df"] = covariates_df
-                    st.session_state["features_df"] = features_df
-
-                    st.markdown("**Outputs**: `events_df` (above), `covariates_df`, `features_df`.")
-                    st.dataframe(features_df.reset_index(), use_container_width=True)
-                    dcol1, dcol2 = st.columns(2)
-                    with dcol1:
-                        st.download_button(
-                            "Download covariates.csv",
-                            data=covariates_df.reset_index().to_csv(index=False).encode("utf-8"),
-                            file_name="covariates.csv",
-                            mime="text/csv",
-                        )
-                    with dcol2:
-                        st.download_button(
-                            "Download features.csv",
-                            data=features_df.reset_index().to_csv(index=False).encode("utf-8"),
-                            file_name="features.csv",
-                            mime="text/csv",
-                        )
-
-                # Stage 3: Adds & Churn (monthly heuristics)
-                with st.expander("Stage 3: Adds & Churn (monthly)", expanded=False):
-                    st.caption("Totals-only path: derive gross adds from net deltas using churn rate heuristics.")
-                    # Determine series
-                    total_s = plot_df.get("Total") if "Total" in plot_df.columns else None
-                    paid_s = plot_df.get("Paid") if "Paid" in plot_df.columns else None
-                    free_s = None
-                    if total_s is not None and paid_s is not None:
-                        free_s = (total_s.astype(float) - paid_s.astype(float)).clip(lower=0)
-                    # Churn rates
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        churn_free_est = st.number_input(
-                            "Monthly churn rate (free)",
-                            min_value=0.0,
-                            max_value=1.0,
-                            value=float(_get_state("churn_free", 0.0)),
-                            step=0.001,
-                            format="%0.3f",
-                        )
-                    with c2:
-                        churn_paid_est = st.number_input(
-                            "Monthly churn rate (paid)",
-                            min_value=0.0,
-                            max_value=1.0,
-                            value=float(_get_state("churn_prem", 0.0)),
-                            step=0.001,
-                            format="%0.3f",
-                        )
-                    # Compute
-                    adds_rows: list[dict] = []
-                    churn_rows: list[dict] = []
-                    idx = plot_df.index
-                    for i, d in enumerate(idx):
-                        if i == 0:
-                            continue
-                        prev_d = idx[i - 1]
-                        if free_s is not None:
-                            free_prev = float(free_s.loc[prev_d])
-                            free_now = float(free_s.loc[d])
-                            canc_free = max(free_prev * churn_free_est, 0.0)
-                            net_free = free_now - free_prev
-                            adds_free = max(net_free + canc_free, 0.0)
-                        else:
-                            canc_free = float("nan")
-                            adds_free = float("nan")
-                        if paid_s is not None:
-                            paid_prev = float(paid_s.loc[prev_d])
-                            paid_now = float(paid_s.loc[d])
-                            canc_paid = max(paid_prev * churn_paid_est, 0.0)
-                            net_paid = paid_now - paid_prev
-                            adds_paid = max(net_paid + canc_paid, 0.0)
-                        else:
-                            canc_paid = float("nan")
-                            adds_paid = float("nan")
-                        adds_rows.append({"date": d, "gross_adds_free": adds_free, "gross_adds_paid": adds_paid})
-                        churn_rows.append({"date": d, "cancels_free": canc_free, "cancels_paid": canc_paid})
-                    if adds_rows:
-                        adds_df = pd.DataFrame(adds_rows).set_index("date")
-                        churn_df = pd.DataFrame(churn_rows).set_index("date")
-                        st.session_state["adds_df"] = adds_df
-                        st.session_state["churn_df"] = churn_df
-                        st.markdown("**Outputs**: `adds_df`, `churn_df` (monthly, heuristics).")
-                        st.dataframe(adds_df.reset_index(), use_container_width=True)
-                        st.dataframe(churn_df.reset_index(), use_container_width=True)
-                        b1, b2 = st.columns(2)
-                        with b1:
-                            st.download_button(
-                                "Download adds.csv",
-                                data=adds_df.reset_index().to_csv(index=False).encode("utf-8"),
-                                file_name="adds.csv",
-                                mime="text/csv",
-                            )
-                        with b2:
-                            st.download_button(
-                                "Download churn.csv",
-                                data=churn_df.reset_index().to_csv(index=False).encode("utf-8"),
-                                file_name="churn.csv",
-                                mime="text/csv",
-                            )
-
-                # Stage 4: Model fitting (Quick Fit)
-                st.subheader("Stage 4: Model fitting (Quick Fit)")
-                st.caption(
-                    "Fits on Total (preferred) or Free if Total is unavailable. "
-                    "Uses detected change points as segments."
-                )
-                horizon_ahead = st.slider("Forecast months ahead", 0, 36, 12, 1)
-                do_fit = st.button("Fit model and overlay")
-                if do_fit:
-                    try:
-                        fit_series_source = plot_df.get("Total") if "Total" in plot_df.columns else plot_df.get("Free")
-                        if fit_series_source is None or fit_series_source.empty:
-                            st.info("Need Total or Free series to fit.")
-                        else:
-                            fit = fit_piecewise_logistic(
-                                total_series=fit_series_source,
-                                breakpoints=breakpoints,
-                                events_df=st.session_state.get("events_df"),
-                            )
-                            st.session_state["pwlog_fit"] = fit
-                            # Overlay fitted curve
-                            overlay_df = pd.DataFrame(
-                                {
-                                    "Actual": fit_series_source,
-                                    "Fitted": fit.fitted_series.reindex(fit_series_source.index),
-                                }
-                            )
-                            base_overlay = alt.Chart(overlay_df.reset_index().rename(columns={"index": "date"})).encode(
-                                x=alt.X("date:T", title="Date")
-                            )
-                            actual_line = (
-                                base_overlay.transform_fold(["Actual"], as_=["Series", "Value"])
-                                .mark_line()
-                                .encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#1f77b4"])))
-                            )
-                            fitted_line = (
-                                base_overlay.transform_fold(["Fitted"], as_=["Series", "Value"])
-                                .mark_line(strokeDash=[5, 3])
-                                .encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#ff7f0e"])))
-                            )
-                            st.altair_chart(
-                                alt.layer(actual_line, fitted_line).properties(height=240),
-                                use_container_width=True,
-                            )
-
-                            # Show parameters
-                            c1, c2, c3 = st.columns(3)
-                            c1.metric("K (capacity)", f"{int(fit.carrying_capacity):,}")
-                            c2.metric("Segments (r)", ", ".join(f"{r:0.3f}" for r in fit.segment_growth_rates))
-                            c3.metric("R² on ΔS", f"{fit.r2_on_deltas:0.3f}")
-                            if getattr(fit, "gamma_exog", None) is not None:
-                                st.caption(f"Exogenous effect (log ad): γ_exog={fit.gamma_exog:0.4f}")
-
-                            # Forecast extension
-                            if horizon_ahead > 0:
-                                last_val = float(fit.fitted_series.iloc[-1])
-                                last_r = float(fit.segment_growth_rates[-1]) if fit.segment_growth_rates else 0.0
-                                fc = forecast_piecewise_logistic(
-                                    last_value=last_val,
-                                    months_ahead=horizon_ahead,
-                                    carrying_capacity=fit.carrying_capacity,
-                                    segment_growth_rate=last_r,
-                                    gamma_step_level=fit.gamma_step,
-                                )
-                                fc_index = pd.date_range(
-                                    fit.fitted_series.index[-1] + pd.offsets.MonthEnd(1),
-                                    periods=horizon_ahead,
-                                    freq="M",
-                                )
-                                fc_df = pd.DataFrame({"Forecast": fc}, index=fc_index)
-                                merged = pd.concat([overlay_df, fc_df], axis=0)
-                                chart_fc = (
-                                    alt.Chart(merged.reset_index().rename(columns={"index": "date"}))
-                                    .transform_fold(["Actual", "Fitted", "Forecast"], as_=["Series", "Value"])
-                                    .mark_line()
-                                    .encode(x=alt.X("date:T"), y="Value:Q", color="Series:N")
-                                    .properties(height=240)
-                                )
-                                st.altair_chart(chart_fc, use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Model fit failed: {e}")
-
-                # Stage 5: Diagnostics (delta view)
-                deltas = plot_df.diff()
-                st.subheader("Stage 5: Diagnostics (delta view)")
-                st.bar_chart(deltas.fillna(0))
-                # Tail-only view with window slider placed here
-                window = st.slider("Estimation window (last N months)", 3, 12, window, 1, key="est_window")
-                st.caption("This window recomputes trailing medians for the estimates and the tail chart below.")
-                st.subheader(f"Last {window} months (tail)")
-                tail_df = plot_df.tail(window)
-                # Tail chart: always use Altair so markers appear regardless of Paid
-                base_t = alt.Chart(tail_df.reset_index().rename(columns={"index": "date"})).encode(
-                    x=alt.X("date:T", title="Date")
-                )
-                # Tail legend title reflects whether Paid is plotted in tail
-                tail_has_paid = "Paid" in tail_df.columns
-                plotting_paid_t = bool(use_dual_axis) and tail_has_paid
-                series_title_t = "Series (Paid is dashed)" if plotting_paid_t else "Series"
-                left_t = (
-                    base_t.transform_fold(
-                        [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in tail_df.columns],
-                        as_=["Series", "Value"],
-                    )
-                    .mark_line(point=True)
-                    .encode(
-                        y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
-                        color=alt.Color(
-                            "Series:N",
-                            scale=alt.Scale(scheme="tableau10"),
-                            title=series_title_t,
-                        ),
-                        tooltip=[
-                            alt.Tooltip("date:T", title="Date"),
-                            alt.Tooltip("Series:N", title="Series"),
-                            alt.Tooltip("Value:Q", title="Value"),
-                        ],
-                    )
-                )
-                layers_t = [left_t]
-                if "Paid" in tail_df.columns and use_dual_axis:
-                    right_t = (
-                        base_t.transform_fold(["Paid"], as_=["Series", "Value"])
-                        .mark_line(strokeDash=[4, 3], point=True)
-                        .encode(
-                            y=alt.Y("Value:Q", axis=alt.Axis(title="Paid", orient="right")),
-                            color=alt.Color(
-                                "Series:N",
-                                scale=alt.Scale(range=["#DB4437"]),
-                                title=series_title_t,
-                            ),
-                            tooltip=[
-                                alt.Tooltip("date:T", title="Date"),
-                                alt.Tooltip("Series:N", title="Series"),
-                                alt.Tooltip("Value:Q", title="Value"),
-                            ],
-                        )
-                    )
-                    layers_t.append(right_t)
-                # Markers on tail chart
-                if (ev := st.session_state.get("events_df")) is not None and not ev.empty:
-                    ev2 = ev.dropna(subset=["date"]).copy()
-                    if not ev2.empty:
-                        ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
-                        markers_t = (
-                            alt.Chart(ev2)
-                            .mark_rule(color="#8e44ad", size=3)
-                            .encode(
-                                x="date:T",
-                                tooltip=["date:T", "type:N", "notes:N", "cost:Q"],
-                            )
-                        )
-                        layers_t.append(markers_t)
-                if target_col is not None and breakpoints:
-                    s_t = tail_df[target_col].dropna()
-                    # Convert breakpoints from full series to tail indices if possible
-                    segs_t = []
-                    try:
-                        full_s = plot_df[target_col].dropna()
-                        segs = compute_segment_slopes(full_s, breakpoints)
-                        # Keep segments intersecting the tail range
-                        tail_start = s_t.index[0]
-                        tail_end = s_t.index[-1]
-                        for seg in segs:
-                            if seg.end_date >= tail_start and seg.start_date <= tail_end:
-                                segs_t.append(seg)
-                    except Exception:
-                        segs_t = []
-                    fit_rows_t = []
-                    for seg in segs_t:
-                        xs = pd.date_range(
-                            max(seg.start_date, s_t.index[0]),
-                            min(seg.end_date, s_t.index[-1]),
-                            freq="M",
-                        )
-                        start_val = float(full_s.loc[seg.start_date]) if 'full_s' in locals() else float(s_t.iloc[0])
-                        for i, d in enumerate(xs):
-                            fit_rows_t.append({"date": d, "Fit": start_val + seg.slope_per_month * i})
-                    if fit_rows_t:
-                        fit_df_t = pd.DataFrame(fit_rows_t)
-                        fit_t = alt.Chart(fit_df_t).mark_line(color="#7f8c8d").encode(x="date:T", y="Fit:Q")
-                        layers_t.append(fit_t)
-                chart_t = alt.layer(*layers_t).resolve_scale(y="independent").properties(height=240)
-                st.altair_chart(chart_t, use_container_width=True)
-
-            estimates = _compute_estimates(all_series, paid_series, window)
-
-            # Display whatever we computed
-            cols = st.columns(3)
-            if "start_free" in estimates:
-                cols[0].metric("Starting free (latest)", f"{estimates['start_free']:,}")
-            if "start_premium" in estimates:
-                cols[1].metric("Starting premium (latest)", f"{estimates['start_premium']:,}")
-            if "organic_growth" in estimates:
-                cols[2].metric("Net free growth (monthly)", f"{estimates['organic_growth']*100:0.2f}%")
-
-            cols2 = st.columns(3)
-            if "conv_ongoing" in estimates:
-                cols2[0].metric("Ongoing premium conversion (proxy)", f"{estimates['conv_ongoing']*100:0.3f}%")
-            if not net_only:
-                cols2[1].metric("Free churn", f"{float(estimates.get('churn_free', 0.0))*100:0.2f}%")
-                cols2[2].metric("Premium churn", f"{float(estimates.get('churn_prem', 0.0))*100:0.2f}%")
-            else:
-                cols2[1].metric("Net growth (includes churn)", "—")
-                cols2[2].metric(" ", " ")
-
-            st.caption(
-                "Notes: From totals alone we can compute net growth and a conversion proxy (when both series present). "
-                "Churn and CAC need more detail."
-            )
-
-            if st.button("Apply estimates to Simulator"):
-                # Apply core estimates
-                for k, v in estimates.items():
-                    st.session_state[k] = v
-                # Net-only churn handling
-                if net_only:
-                    st.session_state["churn_free"] = 0.0
-                    st.session_state["churn_prem"] = 0.0
-                # Zero ad spend by default to avoid inflated projections
-                st.session_state["ad_stage1"] = 0.0
-                st.session_state["ad_stage2"] = 0.0
-                st.session_state["ad_const"] = 0.0
-                st.session_state["spend_mode_index"] = 1  # Constant
-                # Set immediate conversion to 0 unless user overrides
-                st.session_state["conv_new"] = 0.0
-                st.session_state["horizon_months"] = max(int(_get_state("horizon_months", 60)), 24)
-                # Set switch flag and rerun to trigger tab switch
-                st.session_state["switch_to_sim"] = True
-                st.success("Applied. Switching to Simulator…")
-                st.rerun()
         except Exception as e:
             st.error(f"Estimation failed: {e}")
 
