@@ -941,6 +941,29 @@ def render_data_import() -> None:
         "No headers by default: first column is date, second is count."
     )
 
+    # Quick export/import access here for convenience
+    with st.expander("Save / Load (quick access)", expanded=False):
+        has_fit_i = st.session_state.get("pwlog_fit") is not None
+        include_fit_i = st.checkbox("Include model fit", value=bool(has_fit_i), key="import_include_fit")
+        include_sim_i = st.checkbox("Include simulation results", value=False, key="import_include_sim")
+        bundle_i = _collect_session_bundle(include_fit_i, include_sim_i)
+        st.download_button(
+            "Export my config (.zip)",
+            data=bundle_i,
+            file_name="substack_session.zip",
+            mime="application/zip",
+            key="import_export_btn",
+        )
+        uploaded_i = st.file_uploader("Restore session bundle (.zip)", type=["zip"], key="import_session_bundle")
+        if uploaded_i is not None:
+            try:
+                _apply_session_bundle(uploaded_i)
+                st.success("Session restored. Switching to Simulator…")
+                st.session_state["switch_to_sim"] = True
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to load bundle: {e}")
+
     c_all, c_paid = st.columns(2)
 
     with c_all:
