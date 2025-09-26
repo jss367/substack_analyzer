@@ -73,18 +73,45 @@ def render_brand_header() -> None:
     st.divider()
 
 
-# Apply brand styles and sidebar logo once
-_inject_brand_styles()
-if LOGO_FULL.exists() or LOGO_ICON.exists():
-    st.sidebar.image(str(LOGO_FULL if LOGO_FULL.exists() else LOGO_ICON), use_container_width=True)
-
-
 def format_currency(value: float) -> str:
     return f"${value:,.0f}"
 
 
 def _get_state(key: str, default):
     return st.session_state.get(key, default)
+
+
+def _apply_pending_state_updates() -> None:
+    """Apply any deferred session state updates before widgets render."""
+
+    pending = st.session_state.pop("_pending_state_update", None)
+    if isinstance(pending, dict):
+        for k, v in pending.items():
+            st.session_state[k] = v
+
+
+def _queue_state_updates(updates: dict[str, Any]) -> None:
+    """Merge updates into the deferred session-state queue."""
+
+    if not updates:
+        return
+
+    pending: dict[str, Any]
+    existing = st.session_state.get("_pending_state_update")
+    if isinstance(existing, dict):
+        pending = dict(existing)
+    else:
+        pending = {}
+
+    pending.update(updates)
+    st.session_state["_pending_state_update"] = pending
+
+
+# Apply brand styles and sidebar logo once
+_inject_brand_styles()
+_apply_pending_state_updates()
+if LOGO_FULL.exists() or LOGO_ICON.exists():
+    st.sidebar.image(str(LOGO_FULL if LOGO_FULL.exists() else LOGO_ICON), use_container_width=True)
 
 
 def _format_date_badges(dates: list[pd.Timestamp | str]) -> str:
@@ -792,8 +819,8 @@ def _apply_session_bundle(file_like) -> None:
         # state
         try:
             state = json.loads(zf.read("state.json"))
-            for k, v in state.items():
-                st.session_state[k] = v
+            if isinstance(state, dict):
+                _queue_state_updates(state)
         except KeyError:
             pass
 
@@ -875,6 +902,7 @@ def render_save_load() -> None:
         if uploaded is not None:
             try:
                 _apply_session_bundle(uploaded)
+                _queue_state_updates({"session_bundle": None})
                 st.success("Session restored. Switching to Simulator…")
                 st.session_state["switch_to_sim"] = True
                 st.rerun()
