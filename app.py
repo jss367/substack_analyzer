@@ -1228,6 +1228,7 @@ def render_data_import() -> None:
                     ]
                 )
                 events_df = st.session_state.get("events_df", default_events)
+                with st.form("events_form"):
                 edited = st.data_editor(
                     events_df,
                     num_rows="dynamic",
@@ -1237,11 +1238,18 @@ def render_data_import() -> None:
                             "Type", options=["Ad spend", "Shout-out", "Other"], width="medium"
                         ),
                         "notes": st.column_config.TextColumn("Notes", width="large"),
-                        "cost": st.column_config.NumberColumn("Cost ($)", step=10.0, help="For Ad spend ROI calc"),
+                            "cost": st.column_config.NumberColumn(
+                                "Cost ($)", step=10.0, min_value=0.0, format="%.2f", help="For Ad spend ROI calc"
+                            ),
                     },
                     use_container_width=True,
                     key="events_editor",
                 )
+                    submitted_events = st.form_submit_button("Apply events changes")
+                if submitted_events:
+                    # Ensure numeric dtype for cost to prevent UI resets
+                    with suppress(Exception):
+                        edited["cost"] = pd.to_numeric(edited["cost"], errors="coerce")
                 st.session_state["events_df"] = edited
 
                 # Stage 2: Build covariates/features (monthly) from events and optional ad spend upload
