@@ -1163,8 +1163,8 @@ def render_data_import() -> None:
         default_events = pd.DataFrame([{"date": None, "type": "Ad spend", "notes": "", "cost": 0.0}])
         events_df = st.session_state.get("events_df", default_events)
 
-        # Live-sync editor: updates `events_df` immediately via on_change callback
-        st.data_editor(
+        # Live-sync editor: commit edits immediately to session state on rerun
+        edited = st.data_editor(
             events_df,
             num_rows="dynamic",
             column_config={
@@ -1179,8 +1179,16 @@ def render_data_import() -> None:
             },
             use_container_width=True,
             key="events_editor",
-            on_change=_on_events_change,
         )
+        # Normalize and immediately apply to session so charts below reflect changes this run
+        with suppress(Exception):
+            if "cost" in edited.columns:
+                edited["cost"] = pd.to_numeric(edited["cost"], errors="coerce")
+            if "date" in edited.columns:
+                edited["date"] = (
+                    pd.to_datetime(edited["date"], errors="coerce").dt.to_period("M").dt.to_timestamp("M").dt.date
+                )
+        st.session_state["events_df"] = edited
 
     def _events_features(plot_df: pd.DataFrame) -> None:
         with st.expander("Stage 2: Events & Features (monthly)", expanded=False):
@@ -1589,6 +1597,9 @@ def render_data_import() -> None:
                 with suppress(Exception):
                     _emit_observations(plot_df)
 
+                # Stage 2: Events editor before plotting so markers reflect latest edits
+                _events_editor()
+
                 # Chart controls
                 use_dual_axis = st.checkbox(
                     "Use separate right axis for Paid",
@@ -1610,8 +1621,6 @@ def render_data_import() -> None:
                 target_col = "Total" if "Total" in plot_df.columns else ("Free" if "Free" in plot_df.columns else None)
                 breakpoints = _trend_detection(plot_df, target_col)
 
-                # Stage 2: Events
-                _events_editor()
                 _events_features(plot_df)
 
                 # Stage 3: Adds & Churn
