@@ -88,6 +88,39 @@ def _apply_pending_state_updates() -> None:
     if isinstance(pending, dict):
         for k, v in pending.items():
             st.session_state[k] = v
+        # Keep events editor widget in sync when pending update includes events
+        if "events_df" in pending:
+            try:
+                st.session_state["events_editor"] = pending["events_df"]
+            except Exception:
+                pass
+
+
+def _on_events_change() -> None:
+    """Callback to live-sync Events editor to session state and charts.
+
+    - Reads the edited table from `st.session_state["events_editor"]`
+    - Normalizes dates to month-end (to align with monthly charts)
+    - Coerces cost to numeric
+    - Defers state write via `_pending_state_update` so charts above see it on rerun
+    """
+    try:
+        edited_val = st.session_state.get("events_editor")
+        if edited_val is None:
+            return
+        df = pd.DataFrame(edited_val).copy()
+        if "cost" in df.columns:
+            with suppress(Exception):
+                df["cost"] = pd.to_numeric(df["cost"], errors="coerce")
+        if "date" in df.columns:
+            with suppress(Exception):
+                # Normalize to month-end date objects so markers align with chart
+                df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.to_period("M").dt.to_timestamp("M").dt.date
+        # Defer update so it applies before charts render on the next run
+        st.session_state["_pending_state_update"] = {"events_df": df}
+    except Exception:
+        # Best-effort; ignore malformed edits
+        pass
 
 
 # Apply brand styles and sidebar logo once
@@ -1123,6 +1156,7 @@ def render_data_import() -> None:
                     st.session_state["events_df"] = merged
                     st.success("Added detected change dates to Events.")
                     # Immediately rerun so upstream charts re-render with new event markers
+                    st.session_state["events_editor"] = merged
                     st.rerun()
                 except Exception:
                     st.info("Could not add detected dates. Try again after loading data.")
@@ -1134,31 +1168,24 @@ def render_data_import() -> None:
         default_events = pd.DataFrame([{"date": None, "type": "Ad spend", "notes": "", "cost": 0.0}])
         events_df = st.session_state.get("events_df", default_events)
 
-        with st.form("events_form"):
-            edited = st.data_editor(
-                events_df,
-                num_rows="dynamic",
-                column_config={
-                    "date": st.column_config.DateColumn("Date"),
-                    "type": st.column_config.SelectboxColumn(
-                        "Type", options=["Ad spend", "Shout-out", "Other"], width="medium"
-                    ),
-                    "notes": st.column_config.TextColumn("Notes", width="large"),
-                    "cost": st.column_config.NumberColumn(
-                        "Cost ($)", step=10.0, min_value=0.0, format="%.2f", help="For Ad spend ROI calc"
-                    ),
-                },
-                use_container_width=True,
-                key="events_editor",
-            )
-            submitted = st.form_submit_button("Apply events changes")
-        if submitted:
-            with suppress(Exception):
-                edited["cost"] = pd.to_numeric(edited["cost"], errors="coerce")
-            st.session_state["events_df"] = edited
-            # Rerun so charts above re-render with new event markers immediately
-            st.rerun()
-        st.session_state["events_df"] = edited
+        # Live-sync editor: updates `events_df` immediately via on_change callback
+        st.data_editor(
+            events_df,
+            num_rows="dynamic",
+            column_config={
+                "date": st.column_config.DateColumn("Date"),
+                "type": st.column_config.SelectboxColumn(
+                    "Type", options=["Ad spend", "Shout-out", "Other"], width="medium"
+                ),
+                "notes": st.column_config.TextColumn("Notes", width="large"),
+                "cost": st.column_config.NumberColumn(
+                    "Cost ($)", step=10.0, min_value=0.0, format="%.2f", help="For Ad spend ROI calc"
+                ),
+            },
+            use_container_width=True,
+            key="events_editor",
+            on_change=_on_events_change,
+        )
 
     def _events_features(plot_df: pd.DataFrame) -> None:
         with st.expander("Stage 2: Events & Features (monthly)", expanded=False):
