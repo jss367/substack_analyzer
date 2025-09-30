@@ -88,12 +88,6 @@ def _apply_pending_state_updates() -> None:
     if isinstance(pending, dict):
         for k, v in pending.items():
             st.session_state[k] = v
-        # Keep events editor widget in sync when pending update includes events
-        if "events_df" in pending:
-            try:
-                st.session_state["events_editor"] = pending["events_df"]
-            except Exception:
-                pass
 
 
 def _on_events_change() -> None:
@@ -1156,7 +1150,6 @@ def render_data_import() -> None:
                     st.session_state["events_df"] = merged
                     st.success("Added detected change dates to Events.")
                     # Immediately rerun so upstream charts re-render with new event markers
-                    st.session_state["events_editor"] = merged
                     st.rerun()
                 except Exception:
                     st.info("Could not add detected dates. Try again after loading data.")
