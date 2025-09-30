@@ -112,6 +112,8 @@ def _on_events_change() -> None:
                 df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.to_period("M").dt.to_timestamp("M").dt.date
         # Defer update so it applies before charts render on the next run
         st.session_state["_pending_state_update"] = {"events_df": df}
+        # Trigger immediate rerun so charts refresh with new event markers
+        st.rerun()
     except Exception:
         # Best-effort; ignore malformed edits
         pass
