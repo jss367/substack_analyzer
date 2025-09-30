@@ -1122,6 +1122,8 @@ def render_data_import() -> None:
                     )
                     st.session_state["events_df"] = merged
                     st.success("Added detected change dates to Events.")
+                    # Immediately rerun so upstream charts re-render with new event markers
+                    st.rerun()
                 except Exception:
                     st.info("Could not add detected dates. Try again after loading data.")
         return bkps or []
@@ -1153,6 +1155,9 @@ def render_data_import() -> None:
         if submitted:
             with suppress(Exception):
                 edited["cost"] = pd.to_numeric(edited["cost"], errors="coerce")
+            st.session_state["events_df"] = edited
+            # Rerun so charts above re-render with new event markers immediately
+            st.rerun()
         st.session_state["events_df"] = edited
 
     def _events_features(plot_df: pd.DataFrame) -> None:
