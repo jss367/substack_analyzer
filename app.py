@@ -23,9 +23,9 @@ from substack_analyzer.model import simulate_growth
 from substack_analyzer.persistence import apply_session_bundle, collect_session_bundle
 from substack_analyzer.types import AdSpendSchedule, SimulationInputs
 from substack_analyzer.ui import format_currency as ui_format_currency
+from substack_analyzer.ui import format_date_badges as ui_format_date_badges
 from substack_analyzer.ui import inject_brand_styles as ui_inject_brand_styles
 from substack_analyzer.ui import render_brand_header as ui_render_brand_header
-from substack_analyzer.ui import format_date_badges as ui_format_date_badges
 
 # Asset paths
 ASSETS_DIR = Path(__file__).parent / "logos"
@@ -164,7 +164,7 @@ def trend_detection_ui(plot_df: pd.DataFrame, target_col: Optional[str]) -> list
     max_bkps = st.slider("Max changes to detect", 0, 8, 3, 1, key="max_changes_detect")
     try:
         bkps = detect_change_points(plot_df[target_col], max_changes=max_bkps)
-        except Exception:
+    except Exception:
         bkps = []
 
     if bkps:
@@ -210,9 +210,13 @@ def events_editor() -> None:
         num_rows="dynamic",
         column_config={
             "date": st.column_config.DateColumn("Date"),
-            "type": st.column_config.SelectboxColumn("Type", options=["Ad spend", "Shout-out", "Other"], width="medium"),
+            "type": st.column_config.SelectboxColumn(
+                "Type", options=["Ad spend", "Shout-out", "Other"], width="medium"
+            ),
             "notes": st.column_config.TextColumn("Notes", width="large"),
-            "cost": st.column_config.NumberColumn("Cost ($)", step=10.0, min_value=0.0, format="%.2f", help="For Ad spend ROI calc"),
+            "cost": st.column_config.NumberColumn(
+                "Cost ($)", step=10.0, min_value=0.0, format="%.2f", help="For Ad spend ROI calc"
+            ),
         },
         use_container_width=True,
         key="events_editor",
@@ -221,7 +225,9 @@ def events_editor() -> None:
         if "cost" in edited.columns:
             edited["cost"] = pd.to_numeric(edited["cost"], errors="coerce")
         if "date" in edited.columns:
-            edited["date"] = pd.to_datetime(edited["date"], errors="coerce").dt.to_period("M").dt.to_timestamp("M").dt.date
+            edited["date"] = (
+                pd.to_datetime(edited["date"], errors="coerce").dt.to_period("M").dt.to_timestamp("M").dt.date
+            )
     st.session_state["events_df"] = edited
 
 
@@ -230,7 +236,9 @@ def events_features_ui(plot_df: pd.DataFrame) -> None:
         st.caption("Encodes pulse/step features from Events and optional ad spend adstock + log transform.")
         cov_col1, cov_col2 = st.columns(2)
         with cov_col1:
-            ad_file = st.file_uploader("Optional: Ad spend CSV (date, spend)", type=["csv", "xlsx", "xls"], key="ad_csv")
+            ad_file = st.file_uploader(
+                "Optional: Ad spend CSV (date, spend)", type=["csv", "xlsx", "xls"], key="ad_csv"
+            )
         with cov_col2:
             lam = st.slider("Adstock lambda (carryover)", 0.0, 0.99, 0.5, 0.01)
             theta = st.number_input("Log transform theta", min_value=1.0, value=500.0, step=50.0)
@@ -315,13 +323,27 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
             if fit_series_source is None or fit_series_source.empty:
                 st.info("Need Total or Free series to fit.")
                 return
-            fit = fit_piecewise_logistic(total_series=fit_series_source, breakpoints=breakpoints, events_df=st.session_state.get("events_df"))
+            fit = fit_piecewise_logistic(
+                total_series=fit_series_source, breakpoints=breakpoints, events_df=st.session_state.get("events_df")
+            )
             st.session_state["pwlog_fit"] = fit
 
-            overlay_df = pd.DataFrame({"Actual": fit_series_source, "Fitted": fit.fitted_series.reindex(fit_series_source.index)})
-            base_overlay = alt.Chart(overlay_df.reset_index().rename(columns={"index": "date"})).encode(x=alt.X("date:T", title="Date"))
-            actual_line = base_overlay.transform_fold(["Actual"], as_=["Series", "Value"]).mark_line().encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#1f77b4"])) )
-            fitted_line = base_overlay.transform_fold(["Fitted"], as_=["Series", "Value"]).mark_line(strokeDash=[5, 3]).encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#ff7f0e"])) )
+            overlay_df = pd.DataFrame(
+                {"Actual": fit_series_source, "Fitted": fit.fitted_series.reindex(fit_series_source.index)}
+            )
+            base_overlay = alt.Chart(overlay_df.reset_index().rename(columns={"index": "date"})).encode(
+                x=alt.X("date:T", title="Date")
+            )
+            actual_line = (
+                base_overlay.transform_fold(["Actual"], as_=["Series", "Value"])
+                .mark_line()
+                .encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#1f77b4"])))
+            )
+            fitted_line = (
+                base_overlay.transform_fold(["Fitted"], as_=["Series", "Value"])
+                .mark_line(strokeDash=[5, 3])
+                .encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#ff7f0e"])))
+            )
             st.altair_chart(alt.layer(actual_line, fitted_line).properties(height=240), use_container_width=True)
 
             c1, c2, c3 = st.columns(3)
@@ -338,7 +360,10 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
                 st.latex(eq)
                 st.markdown("**Fitted parameters**")
                 st.markdown(f"- **K (capacity)**: {fit.carrying_capacity:,.0f}")
-                st.markdown("- **Segment growth rates r_j**: " + ", ".join(f"r{j+1}={r:0.3f}" for j, r in enumerate(fit.segment_growth_rates)))
+                st.markdown(
+                    "- **Segment growth rates r_j**: "
+                    + ", ".join(f"r{j+1}={r:0.3f}" for j, r in enumerate(fit.segment_growth_rates))
+                )
                 st.markdown(f"- **γ_pulse**: {fit.gamma_pulse:0.4f}")
                 st.markdown(f"- **γ_step**: {fit.gamma_step:0.4f}")
                 if getattr(fit, "gamma_exog", None) is not None:
@@ -354,7 +379,9 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
                     segment_growth_rate=last_r,
                     gamma_step_level=fit.gamma_step,
                 )
-                fc_index = pd.date_range(fit.fitted_series.index[-1] + pd.offsets.MonthEnd(1), periods=horizon_ahead, freq="M")
+                fc_index = pd.date_range(
+                    fit.fitted_series.index[-1] + pd.offsets.MonthEnd(1), periods=horizon_ahead, freq="M"
+                )
                 fc_df = pd.DataFrame({"Forecast": fc}, index=fc_index)
                 merged = pd.concat([overlay_df, fc_df], axis=0)
                 chart_fc = (
@@ -918,7 +945,6 @@ def render_data_import() -> None:
 
     def _plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, series_title: str) -> alt.Chart:
         return plot_series(plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title)
-
 
     # ---------- UI: Header + quick save/load ----------
     st.subheader("Stage 1: Import Substack exports (time series)")
