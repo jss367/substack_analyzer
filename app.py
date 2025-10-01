@@ -1403,6 +1403,23 @@ def render_data_import() -> None:
                 if getattr(fit, "gamma_exog", None) is not None:
                     st.caption(f"Exogenous effect (log ad): γ_exog={fit.gamma_exog:0.4f}")
 
+                with st.expander("Model equation and parameters", expanded=False):
+                    # Logistic delta with piecewise r and optional events/exogenous
+                    eq = r"\Delta S_t = r_{seg(t)}\, S_{t-1} \left(1 - \frac{S_{t-1}}{K}\right) + \gamma_{pulse}\,pulse_t + \gamma_{step}\,step_t"
+                    if getattr(fit, "gamma_exog", None) is not None:
+                        eq += r" + \gamma_{exog}\,x_t"
+                    st.latex(eq)
+                    st.markdown("**Fitted parameters**")
+                    st.markdown(f"- **K (capacity)**: {fit.carrying_capacity:,.0f}")
+                    st.markdown(
+                        "- **Segment growth rates r_j**: "
+                        + ", ".join(f"r{j+1}={r:0.3f}" for j, r in enumerate(fit.segment_growth_rates))
+                    )
+                    st.markdown(f"- **γ_pulse**: {fit.gamma_pulse:0.4f}")
+                    st.markdown(f"- **γ_step**: {fit.gamma_step:0.4f}")
+                    if getattr(fit, "gamma_exog", None) is not None:
+                        st.markdown(f"- **γ_exog**: {fit.gamma_exog:0.4f}")
+
                 if horizon_ahead > 0:
                     last_val = float(fit.fitted_series.iloc[-1])
                     last_r = float(fit.segment_growth_rates[-1]) if fit.segment_growth_rates else 0.0
