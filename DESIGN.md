@@ -39,10 +39,6 @@ This updates the original design to a structural, _adds–churn_ model with satu
 - `observations_df` (daily): `date`, `active_total`, `active_paid`, `active_free`, with flags for imputation.
 - Quick plots: active series (free/paid/total), daily/weekly net changes.
 
-**Notes**
-
-- Daily is preferred. If only monthly data are available, run a monthly mode with equivalent likelihoods (e.g., NegBin on monthly adds, month dummies for seasonality). Clearly tag imputed/resampled periods (e.g., `is_imputed`) and propagate this into larger observation noise during fitting to reflect reduced information.
-
 ---
 
 ## Stage 2 — Event & Covariate Capture
@@ -57,17 +53,14 @@ This updates the original design to a structural, _adds–churn_ model with satu
 
 - Normalize all events/covariates to **daily**.
 - Compute **adstock** per channel: $a_t = x_t + \lambda a_{t-1}$, $\lambda\in[0,1)$ learned.
-- Define **diminishing returns** transform for ads (choose one):
+- Define **diminishing returns** transform for ads:
 
-  - Hill: $g(a_t) = \beta\, a_t^\eta/(\theta^\eta + a_t^\eta)$
   - Log: $g(a_t) = \beta\, \log(1 + a_t/\theta)$
 
 - Encode **shoutouts** as:
 
   - **Pulse** features (short‑lived): Dirac at date convolved with short decay kernel (1–7 days).
   - **Step** features (level lift): indicator $\mathbf{1}(t\ge d)$.
-
-- Build **seasonality** features: day‑of‑week dummies and/or Fourier terms.
 
 - Pulse kernel parameterization: specify half‑life $h$ so that the decay factor $\lambda = 0.5^{1/h}$. Start with a fixed $h$ (e.g., 3 days) and later allow learning $h$ hierarchically across shoutouts.
 - Step effects: estimate per‑event step sizes with partial pooling (hierarchical prior) to stabilize small events.
@@ -76,7 +69,7 @@ This updates the original design to a structural, _adds–churn_ model with satu
 
 - `events_df` (daily): pulse/step encodings with metadata.
 - `covariates_df` (daily): ad spend by channel, posts, social, search.
-- `features_df` (daily): adstocked series, transformed ad response, seasonality terms, content cadence.
+- `features_df` (daily): adstocked series, transformed ad response, content cadence.
 
 ---
 
@@ -92,7 +85,7 @@ This updates the original design to a structural, _adds–churn_ model with satu
 - **Path B (totals only)**: Use a **Kalman smoother** (structural time‑series) to decompose net changes into latent `gross_adds` and `cancels`, with:
 
   - Smoothness priors on adds.
-  - A **tenure‑based hazard prior** for churn (declining with age), modulated by seasonality and content cadence. Enforce monotonicity of the age‑hazard spline or use a decreasing basis to avoid pathological shapes. When only totals exist, anchor paid churn with observed paid data and share information to free churn via a prior relationship.
+  - A **tenure‑based hazard prior** for churn (declining with age), modulated by content cadence. Enforce monotonicity of the age‑hazard spline or use a decreasing basis to avoid pathological shapes. When only totals exist, anchor paid churn with observed paid data and share information to free churn via a prior relationship.
 
 **Outputs**
 
@@ -116,7 +109,7 @@ This updates the original design to a structural, _adds–churn_ model with satu
 - **Exogenous input**: $u_t = \gamma_\text{pulse}\,\text{pulse}_t + \gamma_\text{step}\,\text{step}_t + f_\text{ads}(a_t) + \beta' x_t$.
 
   - **Adstock**: $a_t = x_t + \lambda a_{t-1}$, $\lambda\in[0,1)$ per channel or shared.
-  - **Diminishing returns**: $f_\text{ads}$ via Hill or log form above.
+  - **Diminishing returns**: $f_\text{ads}$ via log form above.
   - **Other covariates**: content cadence, social/search.
 
 - **Likelihoods** (choose by data availability):
@@ -159,7 +152,7 @@ This updates the original design to a structural, _adds–churn_ model with satu
 - **Checks**: Prior and posterior predictive checks; PSIS‑LOO or WAIC for model comparison; target interval coverage (e.g., 50%/80%/95%) and well‑behaved residual autocorrelation.
 - **Event attribution checks**: estimated pulse half‑life; step permanence.
 - **Elasticity checks**: slope of $f_\text{ads}$ at current spend; saturation level proximity ($S_t/K_t$).
-- Residual diagnostics: autocorrelation, leftover seasonality.
+- Residual diagnostics: autocorrelation.
 
 **Outputs**
 
@@ -206,7 +199,7 @@ This updates the original design to a structural, _adds–churn_ model with satu
 
 **Processing**
 
-- **Cohort survival**: tenure‑based hazard for churn (age spline + seasonality + price/cadence flags).
+- **Cohort survival**: tenure‑based hazard for churn (age spline + price/cadence flags).
 - **Free→Paid conversion**: function of cadence/exposure and promotions; can be hierarchical if multiple publications.
 - **Revenue**: monthly & annual pricing, Substack/Stripe fees, annual amortization; ROAS, CAC, payback.
 
@@ -262,8 +255,7 @@ This updates the original design to a structural, _adds–churn_ model with satu
 
 - `date`
 - `adstock_<channel>` (float ≥0)
-- `ad_effect_<channel>` (float) — transformed via Hill/log
-- Seasonality features: `dow_*` or Fourier columns
+- `ad_effect_<channel>` (float) — transformed via log
 - `cadence` (float) — posts/week
 
 ### `adds_df` (daily)
@@ -302,7 +294,7 @@ This updates the original design to a structural, _adds–churn_ model with satu
 
 ## Implementation Notes & MVP Path
 
-- **Dependencies**: PyMC or Stan; ArviZ; pandas; numpy; patsy for seasonality; optional: numpyro.
+- **Dependencies**: PyMC or Stan; ArviZ; optional: numpyro.
 - **Computation**: Start with 1–2 change‑points, shared adstock λ across channels (simplify), NegBin for adds.
 - **Runtime & caching**: Target 2–5 minutes per fit (2 chains, ~1k draws post‑warmup). Cache fits keyed by a data hash of inputs/features. If runtime exceeds budget, fall back to Quick Fit (piecewise‑logistic) and offer to enqueue Pro Fit.
 
