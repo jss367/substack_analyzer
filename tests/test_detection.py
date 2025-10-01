@@ -38,9 +38,7 @@ def test_detect_change_points_single_break():
     idx = pd.period_range("2024-01", periods=len(vals), freq="M").to_timestamp("M")
     s = pd.Series(vals, index=idx)
     bkps = detect_change_points(s, max_changes=3)
-    assert len(bkps) >= 1
-    # Expect a breakpoint near the transition (~month 6)
-    assert any(4 <= b <= 8 for b in bkps)
+    assert bkps[0] in {6, 7}
 
 
 def test_detect_change_points_respects_max_changes_and_spacing():

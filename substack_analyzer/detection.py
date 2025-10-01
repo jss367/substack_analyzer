@@ -57,139 +57,107 @@ def slope_around(series: pd.Series, event_date: pd.Timestamp, window: int = 6) -
     return (float(pre), float(post))
 
 
-def _robust_z(x: pd.Series) -> pd.Series:
-    x = x.replace([np.inf, -np.inf], np.nan).dropna()
-    if x.empty:
-        return pd.Series(dtype=float)
-    med = x.median()
-    mad = (x - med).abs().median()
-    if mad <= 0:
-        # fall back to std if MAD is zero (flat series)
-        std = x.std(ddof=1)
-        if std == 0 or np.isnan(std):
-            return pd.Series(0.0, index=x.index)
-        return (x - x.mean()) / std
-    # 0.6745 makes MAD comparable to std for normal data
-    return 0.6745 * (x - med) / mad
-
-
-def _local_peaks(y: pd.Series) -> pd.Index:
-    """Simple 1D peak detector: strictly >= neighbors; ignores endpoints."""
-    if y.empty or len(y) < 3:
-        return pd.Index([])
-    vals = y.values
-    idx = []
-    for i in range(1, len(vals) - 1):
-        if vals[i] >= vals[i - 1] and vals[i] >= vals[i + 1]:
-            idx.append(y.index[i])
-    return pd.Index(idx)
-
-
 def detect_change_points(
-    total: pd.Series,
-    paid: Optional[pd.Series] = None,
-    max_changes: Optional[int] = 4,
-    consider_ratio: bool = True,
-    min_separation: str = "60D",  # time-based separation
-    smooth_window: int = 3,  # small rolling median smoothing of scores
-    return_scores: bool = True,
-) -> tuple[list[pd.Timestamp], Optional[pd.DataFrame]]:
+    series: pd.Series,
+    paid: Optional[pd.Series] = None,  # placeholder for future multi-series extension
+    max_changes: int = 4,
+    min_seg_len: int = 2,
+    penalty_scale: float = 4.0,
+    return_timestamps: bool = False,
+) -> list[int] | list[pd.Timestamp]:
     """
-    Detect visually obvious 'something happened' points in one or two time series
-    (e.g., Substack total and paid subscribers).
+    Detect change points emphasizing slope breaks (mean shifts in first differences).
+    Uses binary segmentation on delta = diff(series) with a BIC-like penalty.
 
-    Features scored (robust z):
-      - Level jumps: |Δ series|
-      - Slope changes: |Δ² series| (acceleration)
-      - If paid provided and consider_ratio=True: same features on ratio = paid/total
+    Parameters
+    ----------
+    series : pd.Series
+        Time-indexed series (dates as index).
+    paid : Optional[pd.Series]
+        Currently unused; kept for future multi-series extension.
+    max_changes : int
+        Maximum number of change points to return.
+    min_seg_len : int
+        Minimum segment length in delta-space (requires this many deltas per segment).
+    penalty_scale : float
+        Multiplier on sigma^2 * log(n_delta) as the acceptance penalty for adding a split.
+        Larger -> fewer breaks.
+    return_timestamps : bool
+        If True, return change points as pd.Timestamp values instead of integer indices.
 
-    Steps:
-      1) Align to common DatetimeIndex, drop NaNs, sort by time.
-      2) Build features (abs diff and abs accel) for available series (+ ratio).
-      3) Robust z-score each feature; smooth each with rolling median(window).
-      4) Combined score = max across features at each timestamp.
-      5) Pick local peaks in combined score; enforce time-based min_separation.
-      6) If max_changes is set, keep the top-k by combined score.
-
-    Returns:
-      - List of pd.Timestamp change points (sorted).
-      - Optional DataFrame of per-feature and combined scores (if return_scores).
+    Returns
+    -------
+    list[int] | list[pd.Timestamp]
+        Breakpoint positions (indices into the original series or corresponding timestamps).
     """
-    if total is None or total.empty:
-        return [], None
+    s = series.dropna().sort_index()
+    n = len(s)
+    if n < (2 * min_seg_len + 2) or max_changes <= 0:
+        return []
 
-    # 1) Align & clean
-    frames = {"total": total}
-    if paid is not None:
-        frames["paid"] = paid
-    df = pd.concat(frames, axis=1).sort_index()
-    df.index = pd.to_datetime(df.index)
-    df = df.dropna(how="all")
-    if df.shape[0] < 6:
-        return [], None
+    # First difference: slope change = mean shift in delta
+    x = s.diff().dropna().to_numpy()  # length n-1
+    m = len(x)
+    if m < (2 * min_seg_len + 1):
+        return []
 
-    # 2) Build features
-    feats: dict[str, pd.Series] = {}
+    # Estimate noise variance for penalty
+    mad = np.median(np.abs(x - np.median(x))) if m > 0 else 0.0
+    sigma2 = (1.4826 * mad) ** 2 if mad > 0 else (np.var(x, ddof=1) if m > 1 else 0.0)
+    if not np.isfinite(sigma2) or sigma2 == 0.0:
+        sigma2 = 1e-12
 
-    def add_feats(prefix: str, s: pd.Series):
-        s = s.dropna()
-        if s.shape[0] < 6:
-            return
-        d1 = s.diff()
-        d2 = d1.diff()
-        feats[f"{prefix}_abs_delta"] = d1.abs()
-        feats[f"{prefix}_abs_accel"] = d2.abs()
+    penalty = penalty_scale * sigma2 * np.log(max(m, 2))
 
-    add_feats("total", df["total"])
-    if "paid" in df:
-        add_feats("paid", df["paid"])
-        if consider_ratio:
-            # conversion rate; guard division & extreme values
-            ratio = (df["paid"] / df["total"]).replace([np.inf, -np.inf], np.nan).clip(0, 1)
-            add_feats("ratio", ratio)
+    # Prefix sums for SSE
+    S1 = np.zeros(m + 1)  # sum x
+    S2 = np.zeros(m + 1)  # sum x^2
+    S1[1:] = np.cumsum(x)
+    S2[1:] = np.cumsum(x * x)
 
-    # If we ended up with no features (all too short), bail
-    if not feats:
-        return [], None
+    def seg_sse(a: int, b: int) -> float:
+        n_ = b - a
+        if n_ <= 0:
+            return 0.0
+        s1 = S1[b] - S1[a]
+        s2 = S2[b] - S2[a]
+        mu = s1 / n_
+        return s2 - n_ * mu * mu
 
-    # 3) Robust z-score and smooth
-    zfeats: dict[str, pd.Series] = {}
-    for k, s in feats.items():
-        # align to shared index by reindex to df.index (NaNs ok)
-        s = s.reindex(df.index)
-        z = _robust_z(s.dropna())
-        z = z.reindex(df.index).fillna(0.0)
-        if smooth_window and smooth_window > 1:
-            z = z.rolling(smooth_window, center=True, min_periods=1).median()
-        zfeats[k] = z
+    def best_split(a: int, b: int) -> tuple[Optional[int], float]:
+        """Return (k, gain) for the best split k in (a+min_seg_len ... b-min_seg_len)."""
+        L = b - a
+        if L < 2 * min_seg_len + 1:
+            return None, 0.0
+        total = seg_sse(a, b)
+        best_k, best_gain = None, 0.0
+        for k in range(a + min_seg_len, b - min_seg_len):
+            gain = total - (seg_sse(a, k) + seg_sse(k, b))
+            if gain > best_gain:
+                best_gain, best_k = gain, k
+        return best_k, best_gain
 
-    zdf = pd.DataFrame(zfeats, index=df.index).fillna(0.0)
+    breaks: list[int] = []
+    segments: list[tuple[int, int]] = [(0, m)]
 
-    # 4) Combined score = max across features at each timestamp
-    zdf["combined"] = zdf.max(axis=1)
-
-    # 5) Local peaks on combined
-    peaks_idx = _local_peaks(zdf["combined"])
-    if len(peaks_idx) == 0:
-        # maybe the series is short or very smooth; consider taking top raw scores
-        peaks_idx = zdf["combined"].nlargest(min(len(zdf), (max_changes or 3))).index
-
-    # Enforce time-based min separation
-    min_sep = pd.Timedelta(min_separation)
-    selected = []
-    peaks = zdf.loc[peaks_idx, "combined"].sort_values(ascending=False)
-    for ts, _score in peaks.items():
-        if not selected:
-            selected.append(ts)
-        else:
-            if all(abs(ts - s) >= min_sep for s in selected):
-                selected.append(ts)
-        if max_changes is not None and len(selected) >= max_changes:
+    while segments and len(breaks) < max_changes:
+        candidate = []
+        for a, b in segments:
+            k, gain = best_split(a, b)
+            if k is not None:
+                candidate.append((gain, a, k, b))
+        if not candidate:
             break
+        gain, a, k, b = max(candidate, key=lambda t: t[0])
+        if gain <= penalty:
+            break
+        breaks.append(k)
+        segments.remove((a, b))
+        segments.extend([(a, k), (k, b)])
 
-    selected = sorted(selected)
+    # Map delta index k to original series index
+    cp_indices = sorted([k + 1 for k in breaks if 0 <= k + 1 < n])
 
-    if return_scores:
-        return selected, zdf
-    else:
-        return selected, None
+    if return_timestamps:
+        return [s.index[i] for i in cp_indices]
+    return cp_indices
