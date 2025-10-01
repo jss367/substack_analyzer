@@ -23,3 +23,45 @@ def test_detect_change_points_small_series():
     s = pd.Series([1, 2, 3, 4, 5], index=idx)
     # Too short to detect
     assert detect_change_points(s, max_changes=3) == []
+
+
+def test_detect_change_points_single_break():
+    # Piecewise linear: slope 5 for 6 months, then slope 1 for 6 months
+    vals = []
+    v = 100
+    for _ in range(6):
+        vals.append(v)
+        v += 5
+    for _ in range(6):
+        vals.append(v)
+        v += 1
+    idx = pd.period_range("2024-01", periods=len(vals), freq="M").to_timestamp("M")
+    s = pd.Series(vals, index=idx)
+    bkps = detect_change_points(s, max_changes=3)
+    assert len(bkps) >= 1
+    # Expect a breakpoint near the transition (~month 6)
+    assert any(4 <= b <= 8 for b in bkps)
+
+
+def test_detect_change_points_respects_max_changes_and_spacing():
+    # Build multiple slope changes
+    parts = [(5, 4), (1, 4), (6, 4), (0, 4)]  # (slope, months)
+    vals = []
+    v = 50
+    for slope, months in parts:
+        for _ in range(months):
+            vals.append(v)
+            v += slope
+    idx = pd.period_range("2024-01", periods=len(vals), freq="M").to_timestamp("M")
+    s = pd.Series(vals, index=idx)
+    bkps = detect_change_points(s, max_changes=2)
+    # At most 2 per max_changes
+    assert len(bkps) <= 2
+    # Enforce minimum separation of 2 months
+    assert all((j - i) >= 2 for i, j in zip(bkps, bkps[1:]))
+
+
+def test_detect_change_points_constant_slope_returns_empty():
+    idx = pd.period_range("2024-01", periods=10, freq="M").to_timestamp("M")
+    s = pd.Series(range(10), index=idx)
+    assert detect_change_points(s, max_changes=5) == []

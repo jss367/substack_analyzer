@@ -1,3 +1,6 @@
+from typing import Optional
+
+import numpy as np
 import pandas as pd
 
 from substack_analyzer.types import SegmentSlope
@@ -54,57 +57,139 @@ def slope_around(series: pd.Series, event_date: pd.Timestamp, window: int = 6) -
     return (float(pre), float(post))
 
 
-def detect_change_points(series: pd.Series, max_changes: int = 4) -> list[int]:
-    """Detect change points emphasizing slope changes rather than level shifts.
+def _robust_z(x: pd.Series) -> pd.Series:
+    x = x.replace([np.inf, -np.inf], np.nan).dropna()
+    if x.empty:
+        return pd.Series(dtype=float)
+    med = x.median()
+    mad = (x - med).abs().median()
+    if mad <= 0:
+        # fall back to std if MAD is zero (flat series)
+        std = x.std(ddof=1)
+        if std == 0 or np.isnan(std):
+            return pd.Series(0.0, index=x.index)
+        return (x - x.mean()) / std
+    # 0.6745 makes MAD comparable to std for normal data
+    return 0.6745 * (x - med) / mad
 
-    Strategy:
-    - Work on the first difference (monthly deltas) and then its difference
-      (acceleration). Large absolute acceleration indicates a slope change.
-    - Pick the top-k local maxima in |acceleration| with a minimum spacing
-      between change points to avoid clustered duplicates.
-    - Return indices relative to the original monthly series.
+
+def _local_peaks(y: pd.Series) -> pd.Index:
+    """Simple 1D peak detector: strictly >= neighbors; ignores endpoints."""
+    if y.empty or len(y) < 3:
+        return pd.Index([])
+    vals = y.values
+    idx = []
+    for i in range(1, len(vals) - 1):
+        if vals[i] >= vals[i - 1] and vals[i] >= vals[i + 1]:
+            idx.append(y.index[i])
+    return pd.Index(idx)
+
+
+def detect_change_points(
+    total: pd.Series,
+    paid: Optional[pd.Series] = None,
+    max_changes: Optional[int] = 4,
+    consider_ratio: bool = True,
+    min_separation: str = "60D",  # time-based separation
+    smooth_window: int = 3,  # small rolling median smoothing of scores
+    return_scores: bool = True,
+) -> tuple[list[pd.Timestamp], Optional[pd.DataFrame]]:
     """
-    s = series.dropna()
-    n = s.shape[0]
-    if n < 6:
-        return []
+    Detect visually obvious 'something happened' points in one or two time series
+    (e.g., Substack total and paid subscribers).
 
-    # First and second differences
-    delta = s.diff().dropna()
-    accel = delta.diff().dropna()
-    if accel.empty:
-        return []
+    Features scored (robust z):
+      - Level jumps: |Δ series|
+      - Slope changes: |Δ² series| (acceleration)
+      - If paid provided and consider_ratio=True: same features on ratio = paid/total
 
-    # Score by absolute acceleration
-    score = accel.abs()
+    Steps:
+      1) Align to common DatetimeIndex, drop NaNs, sort by time.
+      2) Build features (abs diff and abs accel) for available series (+ ratio).
+      3) Robust z-score each feature; smooth each with rolling median(window).
+      4) Combined score = max across features at each timestamp.
+      5) Pick local peaks in combined score; enforce time-based min_separation.
+      6) If max_changes is set, keep the top-k by combined score.
 
-    # Identify candidate peaks (greater than neighbors)
-    candidates: list[pd.Timestamp] = []
-    values: list[float] = []
-    accel_vals = score.to_numpy()
-    accel_index = score.index
-    for i in range(1, len(accel_vals) - 1):
-        if accel_vals[i] >= accel_vals[i - 1] and accel_vals[i] >= accel_vals[i + 1]:
-            candidates.append(accel_index[i])
-            values.append(float(accel_vals[i]))
+    Returns:
+      - List of pd.Timestamp change points (sorted).
+      - Optional DataFrame of per-feature and combined scores (if return_scores).
+    """
+    if total is None or total.empty:
+        return [], None
 
-    if not candidates:
-        return []
+    # 1) Align & clean
+    frames = {"total": total}
+    if paid is not None:
+        frames["paid"] = paid
+    df = pd.concat(frames, axis=1).sort_index()
+    df.index = pd.to_datetime(df.index)
+    df = df.dropna(how="all")
+    if df.shape[0] < 6:
+        return [], None
 
-    # Sort by magnitude descending and enforce min separation (in months)
-    order = sorted(range(len(candidates)), key=lambda k: values[k], reverse=True)
-    min_separation = 2  # months
-    selected_dates: list[pd.Timestamp] = []
-    for idx in order:
-        d = candidates[idx]
-        # Enforce spacing relative to already selected
-        if all(abs(s.index.get_loc(d) - s.index.get_loc(sd)) >= min_separation for sd in selected_dates):
-            selected_dates.append(d)
-        if len(selected_dates) >= max_changes:
+    # 2) Build features
+    feats: dict[str, pd.Series] = {}
+
+    def add_feats(prefix: str, s: pd.Series):
+        s = s.dropna()
+        if s.shape[0] < 6:
+            return
+        d1 = s.diff()
+        d2 = d1.diff()
+        feats[f"{prefix}_abs_delta"] = d1.abs()
+        feats[f"{prefix}_abs_accel"] = d2.abs()
+
+    add_feats("total", df["total"])
+    if "paid" in df:
+        add_feats("paid", df["paid"])
+        if consider_ratio:
+            # conversion rate; guard division & extreme values
+            ratio = (df["paid"] / df["total"]).replace([np.inf, -np.inf], np.nan).clip(0, 1)
+            add_feats("ratio", ratio)
+
+    # If we ended up with no features (all too short), bail
+    if not feats:
+        return [], None
+
+    # 3) Robust z-score and smooth
+    zfeats: dict[str, pd.Series] = {}
+    for k, s in feats.items():
+        # align to shared index by reindex to df.index (NaNs ok)
+        s = s.reindex(df.index)
+        z = _robust_z(s.dropna())
+        z = z.reindex(df.index).fillna(0.0)
+        if smooth_window and smooth_window > 1:
+            z = z.rolling(smooth_window, center=True, min_periods=1).median()
+        zfeats[k] = z
+
+    zdf = pd.DataFrame(zfeats, index=df.index).fillna(0.0)
+
+    # 4) Combined score = max across features at each timestamp
+    zdf["combined"] = zdf.max(axis=1)
+
+    # 5) Local peaks on combined
+    peaks_idx = _local_peaks(zdf["combined"])
+    if len(peaks_idx) == 0:
+        # maybe the series is short or very smooth; consider taking top raw scores
+        peaks_idx = zdf["combined"].nlargest(min(len(zdf), (max_changes or 3))).index
+
+    # Enforce time-based min separation
+    min_sep = pd.Timedelta(min_separation)
+    selected = []
+    peaks = zdf.loc[peaks_idx, "combined"].sort_values(ascending=False)
+    for ts, _score in peaks.items():
+        if not selected:
+            selected.append(ts)
+        else:
+            if all(abs(ts - s) >= min_sep for s in selected):
+                selected.append(ts)
+        if max_changes is not None and len(selected) >= max_changes:
             break
 
-    # Map dates back to series indices
-    indices = [int(s.index.get_loc(d)) for d in sorted(selected_dates)]
-    # Ensure indices are within bounds [1, n-1]
-    indices = [i for i in indices if 0 <= i < n]
-    return indices
+    selected = sorted(selected)
+
+    if return_scores:
+        return selected, zdf
+    else:
+        return selected, None
