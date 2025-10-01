@@ -1,12 +1,7 @@
 from __future__ import annotations
 
-import io
-import json
 import math
-import zipfile
 from contextlib import suppress
-from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -15,8 +10,21 @@ import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 
+from substack_analyzer.analysis import (
+    build_events_features,
+    compute_estimates,
+    derive_adds_churn,
+    plot_series,
+    read_series,
+)
 from substack_analyzer.calibration import fit_piecewise_logistic, forecast_piecewise_logistic
-from substack_analyzer.model import AdSpendSchedule, SimulationInputs, simulate_growth
+from substack_analyzer.detection import compute_segment_slopes, detect_change_points, slope_around
+from substack_analyzer.model import simulate_growth
+from substack_analyzer.persistence import apply_session_bundle, collect_session_bundle
+from substack_analyzer.types import AdSpendSchedule, SimulationInputs
+from substack_analyzer.ui import format_currency as ui_format_currency
+from substack_analyzer.ui import inject_brand_styles as ui_inject_brand_styles
+from substack_analyzer.ui import render_brand_header as ui_render_brand_header
 
 # Asset paths
 ASSETS_DIR = Path(__file__).parent / "logos"
@@ -31,50 +39,15 @@ st.set_page_config(
 
 
 def _inject_brand_styles() -> None:
-    st.markdown(
-        """
-        <link href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;600&display=swap" rel="stylesheet">
-        <style>
-        :root {
-            --brand-accent: #B92D24;
-            --brand-green-dark: #5F6E60;
-            --brand-green-light: #A6C4A7;
-            --brand-bg: #FFFCF2;
-            --brand-text: #2C2626;
-        }
-        html, body, .stApp { font-family: Helvetica, Arial, sans-serif; color: var(--brand-text); }
-        .stApp { background-color: var(--brand-bg) !important; }
-        [data-testid="stSidebar"] { background-color: var(--brand-green-light) !important; }
-        [data-testid="stSidebar"] * { color: var(--brand-text); }
-        h1, h2, h3, h4, h5, h6 { font-family: 'Source Serif 4', Georgia, serif; color: var(--brand-green-dark); }
-        a { color: var(--brand-accent); }
-        .stButton>button { background-color: var(--brand-green-dark); color: #fff; border: 0; border-radius: 6px; }
-        .stButton>button:hover { background-color: #4d5a50; }
-        /* Make header transparent to let theme show */
-        .stApp header { background: transparent; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    ui_inject_brand_styles()
 
 
 def render_brand_header() -> None:
-    c1, c2 = st.columns([1, 5])
-    with c1:
-        if LOGO_FULL.exists():
-            st.image(str(LOGO_FULL), use_container_width=True)
-        elif LOGO_ICON.exists():
-            st.image(str(LOGO_ICON), width=96)
-    with c2:
-        st.markdown(
-            "<div style='padding-top:8px;'><h1 style='margin-bottom:0;'>Substack Ads ROI Simulator</h1></div>",
-            unsafe_allow_html=True,
-        )
-    st.divider()
+    ui_render_brand_header(LOGO_FULL, LOGO_ICON)
 
 
 def format_currency(value: float) -> str:
-    return f"${value:,.0f}"
+    return ui_format_currency(value)
 
 
 def _get_state(key: str, default):
@@ -88,35 +61,6 @@ def _apply_pending_state_updates() -> None:
     if isinstance(pending, dict):
         for k, v in pending.items():
             st.session_state[k] = v
-
-
-def _on_events_change() -> None:
-    """Callback to live-sync Events editor to session state and charts.
-
-    - Reads the edited table from `st.session_state["events_editor"]`
-    - Normalizes dates to month-end (to align with monthly charts)
-    - Coerces cost to numeric
-    - Defers state write via `_pending_state_update` so charts above see it on rerun
-    """
-    try:
-        edited_val = st.session_state.get("events_editor")
-        if edited_val is None:
-            return
-        df = pd.DataFrame(edited_val).copy()
-        if "cost" in df.columns:
-            with suppress(Exception):
-                df["cost"] = pd.to_numeric(df["cost"], errors="coerce")
-        if "date" in df.columns:
-            with suppress(Exception):
-                # Normalize to month-end date objects so markers align with chart
-                df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.to_period("M").dt.to_timestamp("M").dt.date
-        # Defer update so it applies before charts render on the next run
-        st.session_state["_pending_state_update"] = {"events_df": df}
-        # Trigger immediate rerun so charts refresh with new event markers
-        st.rerun()
-    except Exception:
-        # Best-effort; ignore malformed edits
-        pass
 
 
 # Apply brand styles and sidebar logo once
@@ -153,122 +97,6 @@ def slider_state(label: str, *, key: str, default_value, **kwargs):
     if key not in st.session_state:
         kwargs["value"] = default_value
     return st.slider(label, **kwargs)
-
-
-@dataclass(frozen=True)
-class SegmentSlope:
-    start_index: int
-    end_index: int
-    start_date: pd.Timestamp
-    end_date: pd.Timestamp
-    slope_per_month: float
-
-
-def _fit_slope_per_month(values: pd.Series) -> float:
-    if len(values) < 2:
-        return 0.0
-    x = pd.RangeIndex(len(values)).to_numpy(dtype=float)
-    y = values.to_numpy(dtype=float)
-    denom = float(((x - x.mean()) ** 2).sum())
-    if denom == 0.0:
-        return 0.0
-    slope = float(((x - x.mean()) * (y - y.mean())).sum() / denom)
-    return slope
-
-
-def detect_change_points(series: pd.Series, max_changes: int = 4) -> list[int]:
-    """Detect change points emphasizing slope changes rather than level shifts.
-
-    Strategy:
-    - Work on the first difference (monthly deltas) and then its difference
-      (acceleration). Large absolute acceleration indicates a slope change.
-    - Pick the top-k local maxima in |acceleration| with a minimum spacing
-      between change points to avoid clustered duplicates.
-    - Return indices relative to the original monthly series.
-    """
-    s = series.dropna()
-    n = s.shape[0]
-    if n < 6:
-        return []
-
-    # First and second differences
-    delta = s.diff().dropna()
-    accel = delta.diff().dropna()
-    if accel.empty:
-        return []
-
-    # Score by absolute acceleration
-    score = accel.abs()
-
-    # Identify candidate peaks (greater than neighbors)
-    candidates: list[pd.Timestamp] = []
-    values: list[float] = []
-    accel_vals = score.to_numpy()
-    accel_index = score.index
-    for i in range(1, len(accel_vals) - 1):
-        if accel_vals[i] >= accel_vals[i - 1] and accel_vals[i] >= accel_vals[i + 1]:
-            candidates.append(accel_index[i])
-            values.append(float(accel_vals[i]))
-
-    if not candidates:
-        return []
-
-    # Sort by magnitude descending and enforce min separation (in months)
-    order = sorted(range(len(candidates)), key=lambda k: values[k], reverse=True)
-    min_separation = 2  # months
-    selected_dates: list[pd.Timestamp] = []
-    for idx in order:
-        d = candidates[idx]
-        # Enforce spacing relative to already selected
-        if all(abs(s.index.get_loc(d) - s.index.get_loc(sd)) >= min_separation for sd in selected_dates):
-            selected_dates.append(d)
-        if len(selected_dates) >= max_changes:
-            break
-
-    # Map dates back to series indices
-    indices = [int(s.index.get_loc(d)) for d in sorted(selected_dates)]
-    # Ensure indices are within bounds [1, n-1]
-    indices = [i for i in indices if 0 <= i < n]
-    return indices
-
-
-def compute_segment_slopes(series: pd.Series, breakpoints: list[int]) -> list[SegmentSlope]:
-    s = series.dropna()
-    if not breakpoints:
-        breakpoints = [s.shape[0]]
-    segments: list[SegmentSlope] = []
-    start = 0
-    for bp in breakpoints:
-        seg_vals = s.iloc[start:bp]
-        slope = _fit_slope_per_month(seg_vals)
-        segments.append(
-            SegmentSlope(
-                start_index=start,
-                end_index=bp - 1,
-                start_date=s.index[start],
-                end_date=s.index[bp - 1],
-                slope_per_month=float(slope),
-            )
-        )
-        start = bp
-    return segments
-
-
-def slope_around(series: pd.Series, event_date: pd.Timestamp, window: int = 6) -> tuple[float, float]:
-    """Return (pre_slope, post_slope) using +/- window months around event_date."""
-    s = series.dropna()
-    if s.empty:
-        return (0.0, 0.0)
-    # Find closest index at or before event_date
-    idx = s.index.searchsorted(event_date, side="right") - 1
-    idx = max(min(idx, len(s) - 2), 1)
-    start_pre = max(0, idx - window + 1)
-    end_pre = idx + 1
-    start_post = idx + 1
-    end_post = min(len(s), idx + 1 + window)
-    pre = _fit_slope_per_month(s.iloc[start_pre:end_pre])
-    post = _fit_slope_per_month(s.iloc[start_post:end_post])
-    return (float(pre), float(post))
 
 
 def sidebar_inputs() -> SimulationInputs:
@@ -661,236 +489,13 @@ Use the Estimators tab to compute these, then plug them into the Simulator sideb
 
 
 def _read_series(file, has_header: bool, date_sel, count_sel) -> pd.Series:
-    # Reset pointer in case file was read for preview
-    with suppress(Exception):
-        file.seek(0)
-
-    if getattr(file, "name", "").lower().endswith((".xlsx", ".xls")):
-        df = pd.read_excel(file, header=0 if has_header else None)
-    else:
-        df = pd.read_csv(file, header=0 if has_header else None)
-
-    # Determine column names from selection (index or string)
-    if has_header:
-        date_col = date_sel if isinstance(date_sel, str) else df.columns[int(date_sel)]
-        count_col = count_sel if isinstance(count_sel, str) else df.columns[int(count_sel)]
-    else:
-        date_col = df.columns[int(date_sel)]
-        count_col = df.columns[int(count_sel)]
-
-    s = (
-        df[[date_col, count_col]]
-        .rename(columns={date_col: "date", count_col: "count"})
-        .assign(date=lambda d: pd.to_datetime(d["date"], errors="coerce"))
-        .dropna(subset=["date"])  # drop rows with invalid dates
-        .sort_values("date")
-        .set_index("date")["count"]
-    )
-    s = pd.to_numeric(s, errors="coerce").dropna()
-    # Resample to month end using last observation
-    if not s.empty:
-        s = s.resample("M").last().dropna()
-    return s
+    # delegating to analysis.read_series for parsing
+    return read_series(file, has_header, date_sel, count_sel)
 
 
 def _snapshot_state() -> dict:
-    keys = [
-        "start_free",
-        "start_premium",
-        "horizon_months",
-        "organic_growth",
-        "churn_free",
-        "churn_prem",
-        "conv_new",
-        "conv_ongoing",
-        "cac",
-        "ad_manager_fee",
-        "price_monthly",
-        "price_annual",
-        "substack_pct",
-        "stripe_pct",
-        "stripe_flat",
-        "annual_share",
-        "spend_mode_index",
-        "ad_stage1",
-        "ad_stage2",
-        "ad_const",
-        "est_window",
-        "max_changes_detect",
-    ]
-    out: dict = {}
-    for k in keys:
-        if k in st.session_state:
-            v = st.session_state[k]
-            # Cast numpy/pandas scalars to native types
-            if hasattr(v, "item"):
-                try:
-                    v = v.item()
-                except Exception:
-                    pass
-            out[k] = v
-    return out
-
-
-def _collect_session_bundle(include_fit: bool, include_sim: bool) -> bytes:
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        # metadata
-        meta = {
-            "schema_version": 1,
-            "app_name": "Substack Ads ROI Simulator",
-            "exported_at": datetime.utcnow().isoformat() + "Z",
-        }
-        zf.writestr("metadata.json", json.dumps(meta, indent=2))
-
-        # state
-        state = _snapshot_state()
-        zf.writestr("state.json", json.dumps(state, indent=2))
-
-        # series
-        total = st.session_state.get("import_total")
-        if total is not None and isinstance(total, pd.Series) and not total.empty:
-            df_t = total.rename("count").to_frame()
-            df_t.index.name = "date"
-            zf.writestr("series_total.csv", df_t.to_csv(index=True))
-        paid = st.session_state.get("import_paid")
-        if paid is not None and isinstance(paid, pd.Series) and not paid.empty:
-            df_p = paid.rename("count").to_frame()
-            df_p.index.name = "date"
-            zf.writestr("series_paid.csv", df_p.to_csv(index=True))
-
-        # events
-        ev = st.session_state.get("events_df")
-        if ev is not None and isinstance(ev, pd.DataFrame) and not ev.empty:
-            ev_out = ev.copy()
-            with suppress(Exception):
-                ev_out["date"] = pd.to_datetime(ev_out["date"]).dt.date.astype(str)
-            zf.writestr("events.csv", ev_out.to_csv(index=False))
-
-        # covariates
-        covariates = st.session_state.get("covariates_df")
-        if covariates is not None and isinstance(covariates, pd.DataFrame) and not covariates.empty:
-            cov_out = covariates.copy()
-            cov_out = cov_out.reset_index().rename(columns={cov_out.index.name or "index": "date"})
-            with suppress(Exception):
-                cov_out["date"] = pd.to_datetime(cov_out["date"]).dt.date.astype(str)
-            zf.writestr("covariates.csv", cov_out.to_csv(index=False))
-
-        # features
-        features = st.session_state.get("features_df")
-        if features is not None and isinstance(features, pd.DataFrame) and not features.empty:
-            feat_out = features.copy()
-            feat_out = feat_out.reset_index().rename(columns={feat_out.index.name or "index": "date"})
-            with suppress(Exception):
-                feat_out["date"] = pd.to_datetime(feat_out["date"]).dt.date.astype(str)
-            zf.writestr("features.csv", feat_out.to_csv(index=False))
-
-        # fit (optional)
-        if include_fit and (fit := st.session_state.get("pwlog_fit")) is not None:
-            try:
-                fit_dict = {
-                    "carrying_capacity": float(getattr(fit, "carrying_capacity", 0.0)),
-                    "segment_growth_rates": [float(x) for x in getattr(fit, "segment_growth_rates", [])],
-                    "breakpoints": list(getattr(fit, "breakpoints", [])),
-                    "gamma_pulse": float(getattr(fit, "gamma_pulse", 0.0)),
-                    "gamma_step": float(getattr(fit, "gamma_step", 0.0)),
-                    "r2_on_deltas": float(getattr(fit, "r2_on_deltas", 0.0)),
-                }
-                zf.writestr("fit.json", json.dumps(fit_dict, indent=2))
-                fitted = getattr(fit, "fitted_series", None)
-                if isinstance(fitted, pd.Series) and not fitted.empty:
-                    df_f = fitted.rename("fitted").to_frame()
-                    df_f.index.name = "date"
-                    zf.writestr("fit_fitted_series.csv", df_f.to_csv(index=True))
-            except Exception:
-                # Skip fit if serialization fails
-                pass
-
-        # simulation (optional)
-        if include_sim and (sim := st.session_state.get("sim_df")) is not None:
-            try:
-                zf.writestr("sim.csv", sim.to_csv(index=False))
-            except Exception:
-                pass
-
-    buf.seek(0)
-    return buf.getvalue()
-
-
-def _apply_session_bundle(file_like) -> None:
-    with zipfile.ZipFile(file_like, mode="r") as zf:
-        # metadata
-        try:
-            meta = json.loads(zf.read("metadata.json"))
-            if int(meta.get("schema_version", 0)) != 1:
-                raise ValueError("Unsupported bundle version. Please update the app.")
-        except KeyError:
-            # No metadata, assume v1
-            pass
-
-        # state
-        try:
-            state = json.loads(zf.read("state.json"))
-            if isinstance(state, dict):
-                st.session_state["_pending_state_update"] = state
-        except KeyError:
-            pass
-
-        # series: total
-        with suppress(KeyError, Exception):
-            df_t = pd.read_csv(io.BytesIO(zf.read("series_total.csv")))
-            if "date" in df_t.columns and "count" in df_t.columns:
-                s_t = (
-                    df_t.assign(date=lambda d: pd.to_datetime(d["date"]))
-                    .dropna(subset=["date"])  # type: ignore[arg-type]
-                    .set_index("date")["count"]
-                )
-                s_t = pd.to_numeric(s_t, errors="coerce").dropna()
-                if not s_t.empty:
-                    s_t.index = s_t.index.to_period("M").to_timestamp("M")
-                    s_t = s_t.sort_index()
-                    st.session_state["import_total"] = s_t
-
-        # series: paid
-        with suppress(KeyError, Exception):
-            df_p = pd.read_csv(io.BytesIO(zf.read("series_paid.csv")))
-            if "date" in df_p.columns and "count" in df_p.columns:
-                s_p = (
-                    df_p.assign(date=lambda d: pd.to_datetime(d["date"]))
-                    .dropna(subset=["date"])  # type: ignore[arg-type]
-                    .set_index("date")["count"]
-                )
-                s_p = pd.to_numeric(s_p, errors="coerce").dropna()
-                if not s_p.empty:
-                    s_p.index = s_p.index.to_period("M").to_timestamp("M")
-                    s_p = s_p.sort_index()
-                    st.session_state["import_paid"] = s_p
-
-        # events
-        with suppress(KeyError, Exception):
-            ev = pd.read_csv(io.BytesIO(zf.read("events.csv")))
-            if not ev.empty:
-                if "date" in ev.columns:
-                    with suppress(Exception):
-                        ev["date"] = pd.to_datetime(ev["date"]).dt.date
-                st.session_state["events_df"] = ev
-
-        # covariates
-        with suppress(KeyError, Exception):
-            cov = pd.read_csv(io.BytesIO(zf.read("covariates.csv")))
-            if {"date", "ad_spend"}.issubset(cov.columns):
-                cov["date"] = pd.to_datetime(cov["date"]).dt.to_period("M").dt.to_timestamp("M")
-                cov = cov.set_index("date").sort_index()
-                st.session_state["covariates_df"] = cov
-
-        # features
-        with suppress(KeyError, Exception):
-            feat = pd.read_csv(io.BytesIO(zf.read("features.csv")))
-            need = {"date", "pulse", "step", "adstock", "ad_effect_log"}
-            if need.issubset(feat.columns):
-                feat["date"] = pd.to_datetime(feat["date"]).dt.to_period("M").dt.to_timestamp("M")
-                feat = feat.set_index("date").sort_index()
-                st.session_state["features_df"] = feat
+    # Deprecated: kept for compatibility; persistence moved to module
+    return {}
 
 
 def render_save_load() -> None:
@@ -902,7 +507,7 @@ def render_save_load() -> None:
         has_fit = st.session_state.get("pwlog_fit") is not None
         include_fit = st.checkbox("Include model fit", value=bool(has_fit))
         include_sim = st.checkbox("Include simulation results", value=False)
-        bundle = _collect_session_bundle(include_fit, include_sim)
+        bundle = collect_session_bundle(include_fit, include_sim)
         st.download_button(
             "Download session bundle (.zip)",
             data=bundle,
@@ -913,7 +518,7 @@ def render_save_load() -> None:
         uploaded = st.file_uploader("Upload session bundle (.zip)", type=["zip"], key="session_bundle")
         if uploaded is not None:
             try:
-                _apply_session_bundle(uploaded)
+                apply_session_bundle(uploaded)
                 st.success("Session restored. Switching to Simulator…")
                 st.session_state["switch_to_sim"] = True
                 st.rerun()
@@ -924,56 +529,7 @@ def render_save_load() -> None:
 def _compute_estimates(
     all_series: Optional[pd.Series], paid_series: Optional[pd.Series], window_months: int = 6
 ) -> dict:
-    estimates: dict = {}
-
-    # Helper to median positive
-    def _median_positive(s: pd.Series) -> float:
-        s = s.dropna()
-        s = s[s > 0]
-        return float(s.median()) if not s.empty else 0.0
-
-    if all_series is not None and paid_series is not None and not all_series.empty and not paid_series.empty:
-        aligned = pd.concat([all_series, paid_series], axis=1, keys=["all", "paid"]).dropna()
-        if aligned.empty:
-            raise ValueError("No overlapping dates between All and Paid series")
-        aligned["free"] = aligned["all"] - aligned["paid"]
-        for col in ["free", "paid"]:
-            aligned[f"{col}_delta"] = aligned[col].diff()
-            aligned[f"{col}_rate"] = aligned[f"{col}_delta"] / aligned[col].shift(1)
-        aligned["conv_proxy"] = aligned["paid_delta"] / aligned["free"].shift(1)
-        tail = aligned.tail(window_months)
-
-        estimates.update(
-            {
-                "start_free": int(aligned["free"].iloc[-1]),
-                "start_premium": int(aligned["paid"].iloc[-1]),
-                "organic_growth": _median_positive(tail["free_rate"]),  # net free growth
-                "conv_ongoing": _median_positive(tail["conv_proxy"]),
-            }
-        )
-    elif all_series is not None and not all_series.empty:
-        # Only total subscribers series; assume premium unchanged (use existing state)
-        total = all_series
-        total_delta = total.diff()
-        total_rate = total_delta / total.shift(1)
-        tail = total_rate.tail(window_months)
-        estimates.update(
-            {
-                "start_free": int(total.iloc[-1] - int(_get_state("start_premium", 0))),
-                "organic_growth": _median_positive(tail),  # net total rate as proxy
-            }
-        )
-    elif paid_series is not None and not paid_series.empty:
-        # Only paid series; we can set starting premium
-        estimates.update({"start_premium": int(paid_series.iloc[-1])})
-
-    # Keep churn defaults if not computed elsewhere (cannot infer from topline series)
-    if "churn_free" not in estimates:
-        estimates["churn_free"] = float(_get_state("churn_free", 0.01))
-    if "churn_prem" not in estimates:
-        estimates["churn_prem"] = float(_get_state("churn_prem", 0.01))
-
-    return estimates
+    return compute_estimates(all_series, paid_series, window_months)
 
 
 def render_data_import() -> None:
@@ -981,9 +537,6 @@ def render_data_import() -> None:
     Stage 1–5: Import, preview, annotate, feature-build, quick-fit, diagnostics, and handoff.
 
     Notes:
-    - Assumes external helpers exist: _collect_session_bundle, _apply_session_bundle, _get_state, _read_series,
-      detect_change_points, _format_date_badges, compute_segment_slopes, fit_piecewise_logistic,
-      forecast_piecewise_logistic, _compute_estimates.
     - Uses st.session_state keys:
       import_total, import_paid, observations_df, events_df, covariates_df, features_df,
       adds_df, churn_df, pwlog_fit, switch_to_sim, est_window, horizon_months, ...
@@ -1037,52 +590,7 @@ def render_data_import() -> None:
         return file_obj, has_header, date_sel, count_sel
 
     def _plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, series_title: str) -> alt.Chart:
-        base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
-            x=alt.X("date:T", title="Date")
-        )
-        left_series = [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in plot_df.columns]
-        layers = []
-        if left_series:
-            left = (
-                base.transform_fold(left_series, as_=["Series", "Value"])
-                .mark_line(point=True)
-                .encode(
-                    y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
-                    color=alt.Color("Series:N", scale=alt.Scale(scheme="tableau10"), title=series_title),
-                    tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("Series:N"), alt.Tooltip("Value:Q")],
-                )
-            )
-            layers.append(left)
-        if use_dual_axis and ("Paid" in plot_df.columns):
-            right = (
-                base.transform_fold(["Paid"], as_=["Series", "Value"])
-                .mark_line(strokeDash=[4, 3], point=True)
-                .encode(
-                    y=alt.Y("Value:Q", axis=alt.Axis(title="Paid", orient="right"), scale=alt.Scale(zero=True)),
-                    color=alt.Color("Series:N", scale=alt.Scale(range=["#DB4437"]), title=series_title),
-                    tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("Series:N"), alt.Tooltip("Value:Q")],
-                )
-            )
-            layers.append(right)
-
-        # Overlay event markers if present
-        ev = st.session_state.get("events_df")
-        if ev is not None and not ev.empty:
-            ev2 = ev.dropna(subset=["date"]).copy()
-            if not ev2.empty:
-                with suppress(Exception):
-                    ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
-                markers = (
-                    alt.Chart(ev2)
-                    .mark_rule(color="#8e44ad", size=3)
-                    .encode(x="date:T", tooltip=["date:T", "type:N", "notes:N", "cost:Q"])
-                )
-                layers.append(markers)
-
-        chart = alt.layer(*layers).properties(height=260)
-        if use_dual_axis and ("Paid" in plot_df.columns):
-            chart = chart.resolve_scale(y="independent")
-        return chart
+        return plot_series(plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title)
 
     def _emit_observations(plot_df: pd.DataFrame) -> None:
         """Stage 1 output: observations_df (current granularity)."""
@@ -1202,63 +710,7 @@ def render_data_import() -> None:
                 lam = st.slider("Adstock lambda (carryover)", 0.0, 0.99, 0.5, 0.01)
                 theta = st.number_input("Log transform theta", min_value=1.0, value=500.0, step=50.0)
 
-            monthly_index = plot_df.index
-            pulse = pd.Series(0.0, index=monthly_index, name="pulse")
-            step = pd.Series(0.0, index=monthly_index, name="step")
-
-            ev_src = st.session_state.get("events_df")
-            if ev_src is not None and not ev_src.empty:
-                ev2 = ev_src.dropna(subset=["date"]).copy()
-                with suppress(Exception):
-                    ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
-                for _, r in ev2.iterrows():
-                    d = r.get("date")
-                    if pd.isna(d) or d not in monthly_index:
-                        continue
-                    cost = float(r.get("cost", 1.0) or 1.0)
-                    kind = str(r.get("type", ""))
-                    weight = cost if kind.lower() in {"ad spend", "ad"} else 1.0
-                    pulse.loc[d] += float(weight)
-                    step.loc[d:] += 1.0
-
-            # Optional ad spend covariate
-            ad_spend = pd.Series(0.0, index=monthly_index, name="ad_spend")
-            if ad_file is not None:
-                try:
-                    if ad_file.name.lower().endswith((".xlsx", ".xls")):
-                        ad_df = pd.read_excel(ad_file)
-                    else:
-                        ad_df = pd.read_csv(ad_file)
-                    if {"date", "spend"}.issubset(ad_df.columns):
-                        ad_df = ad_df.assign(date=lambda d: pd.to_datetime(d["date"]))
-                        ad_df = ad_df.dropna(subset=["date"])
-                        ad_df["date"] = ad_df["date"].dt.to_period("M").dt.to_timestamp("M")
-                        ad_df = ad_df.groupby("date", as_index=True)["spend"].sum().sort_index()
-                        ad_spend = ad_df.reindex(monthly_index).fillna(0.0)
-                except Exception:
-                    st.info("Could not parse ad spend CSV; expecting columns: date, spend")
-
-            # Adstock + log transform
-            adstock = pd.Series(0.0, index=monthly_index, name="adstock")
-            if not ad_spend.empty:
-                prev = 0.0
-                vals: list[float] = []
-                for v in ad_spend.to_list():
-                    s_val = float(v) + float(lam) * float(prev)
-                    vals.append(s_val)
-                    prev = s_val
-                adstock = pd.Series(vals, index=monthly_index, name="adstock")
-
-            ad_effect_log = pd.Series(
-                (adstock / max(theta, 1e-9)).add(1.0).apply(lambda x: float(math.log(x))),
-                index=monthly_index,
-                name="ad_effect_log",
-            )
-
-            covariates_df = pd.DataFrame({"ad_spend": ad_spend})
-            features_df = pd.DataFrame(
-                {"pulse": pulse, "step": step, "adstock": adstock, "ad_effect_log": ad_effect_log}
-            )
+            covariates_df, features_df = build_events_features(plot_df, lam=lam, theta=theta, ad_file=ad_file)
 
             st.session_state["covariates_df"] = covariates_df
             st.session_state["features_df"] = features_df
@@ -1312,34 +764,8 @@ def render_data_import() -> None:
                     format="%0.3f",
                 )
 
-            adds_rows, churn_rows = [], []
-            idx = plot_df.index
-            for i, d in enumerate(idx):
-                if i == 0:
-                    continue
-                prev_d = idx[i - 1]
-                if free_s is not None:
-                    free_prev, free_now = float(free_s.loc[prev_d]), float(free_s.loc[d])
-                    canc_free = max(free_prev * churn_free_est, 0.0)
-                    adds_free = max((free_now - free_prev) + canc_free, 0.0)
-                else:
-                    canc_free = float("nan")
-                    adds_free = float("nan")
-
-                if paid_s is not None:
-                    paid_prev, paid_now = float(paid_s.loc[prev_d]), float(paid_s.loc[d])
-                    canc_paid = max(paid_prev * churn_paid_est, 0.0)
-                    adds_paid = max((paid_now - paid_prev) + canc_paid, 0.0)
-                else:
-                    canc_paid = float("nan")
-                    adds_paid = float("nan")
-
-                adds_rows.append({"date": d, "gross_adds_free": adds_free, "gross_adds_paid": adds_paid})
-                churn_rows.append({"date": d, "cancels_free": canc_free, "cancels_paid": canc_paid})
-
-            if adds_rows:
-                adds_df = pd.DataFrame(adds_rows).set_index("date")
-                churn_df = pd.DataFrame(churn_rows).set_index("date")
+            adds_df, churn_df = derive_adds_churn(plot_df, churn_free_est=churn_free_est, churn_paid_est=churn_paid_est)
+            if not adds_df.empty or not churn_df.empty:
                 st.session_state["adds_df"] = adds_df
                 st.session_state["churn_df"] = churn_df
                 st.markdown("**Outputs**: `adds_df`, `churn_df` (monthly, heuristics).")
@@ -1539,7 +965,7 @@ def render_data_import() -> None:
         has_fit_i = st.session_state.get("pwlog_fit") is not None
         include_fit_i = st.checkbox("Include model fit", value=bool(has_fit_i), key="import_include_fit")
         include_sim_i = st.checkbox("Include simulation results", value=False, key="import_include_sim")
-        bundle_i = _collect_session_bundle(include_fit_i, include_sim_i)
+        bundle_i = collect_session_bundle(include_fit_i, include_sim_i)
         st.download_button(
             "Export my config (.zip)",
             data=bundle_i,
@@ -1550,7 +976,7 @@ def render_data_import() -> None:
         uploaded_i = st.file_uploader("Restore session bundle (.zip)", type=["zip"], key="import_session_bundle")
         if uploaded_i is not None:
             try:
-                _apply_session_bundle(uploaded_i)
+                apply_session_bundle(uploaded_i)
                 st.success("Session restored. Switching to Simulator…")
                 st.session_state["switch_to_sim"] = True
                 st.rerun()
@@ -1581,10 +1007,10 @@ def render_data_import() -> None:
 
         try:
             all_series = (
-                _read_series(all_file, all_has_header, all_date_sel, all_count_sel) if all_file is not None else None
+                read_series(all_file, all_has_header, all_date_sel, all_count_sel) if all_file is not None else None
             )
             paid_series = (
-                _read_series(paid_file, paid_has_header, paid_date_sel, paid_count_sel)
+                read_series(paid_file, paid_has_header, paid_date_sel, paid_count_sel)
                 if paid_file is not None
                 else None
             )
@@ -1664,74 +1090,11 @@ def render_data_import() -> None:
 
 def render_outputs_formulas() -> None:
     st.subheader("Stage 8: Outputs and formulas")
-
-    st.markdown(
-        """
-### Subscribers
-- **Free subscribers (month m)**
-  - **Inputs**: starting_free_subscribers, monthly_churn_rate_free, organic_monthly_growth_rate,
-    ad_spend_schedule, cost_per_new_free_subscriber, new_subscriber_premium_conv_rate,
-    ongoing_premium_conv_rate
-  - **Calc**:
-    - free_churned = free_prev × churn_free
-    - free_after_churn = free_prev − free_churned
-    - new_free_organic = free_after_churn × organic_growth
-    - ad_spend_m = schedule(m); new_free_paid = ad_spend_m ÷ CAC
-    - new_free_total = new_free_organic + new_free_paid
-    - convert_from_new = new_free_total × new_subscriber_premium_conv_rate
-    - convert_from_existing = max(free_after_churn + new_free_total − new_free_total, 0) × ongoing_rate
-    - free_m = free_after_churn + new_free_total − (convert_from_new + convert_from_existing)
-
-- **Premium subscribers (month m)**
-  - **Inputs**: starting_premium_subscribers, monthly_churn_rate_premium,
-    new_subscriber_premium_conv_rate, ongoing_premium_conv_rate (and free dynamics above)
-  - **Calc**:
-    - prem_churned = prem_prev × churn_premium
-    - prem_after_churn = prem_prev − prem_churned
-    - prem_m = prem_after_churn + convert_from_new + convert_from_existing
-
-- **Total subscribers** = free_m + prem_m
-
-### Revenue
-- **Net monthly revenue per premium**
-  - **Inputs**: premium_monthly_price_gross, substack_fee_pct, stripe_fee_pct, stripe_flat_fee
-  - **Calc**: net_monthly_per_premium = gross × (1 − substack − stripe) − stripe_flat
-
-- **Net annual revenue per premium**
-  - **Inputs**: premium_annual_price_gross, substack_fee_pct, stripe_fee_pct, stripe_flat_fee
-  - **Calc**: net_annual_per_premium = gross × (1 − substack − stripe) − stripe_flat
-
-- **Net MRR (month m)**
-  - **Inputs**: premium_subscribers_m, annual_share, net_monthly_per_premium
-  - **Calc**: monthly_premium = prem_m × (1 − annual_share)
-    - mrr_net = monthly_premium × net_monthly_per_premium
-
-- **Net revenue (month m)**
-  - **Inputs**: mrr_net, annual_share, net_annual_per_premium
-  - **Calc**: annual_revenue_amortized = (prem_m × annual_share × net_annual_per_premium) ÷ 12
-    - net_revenue = mrr_net + annual_revenue_amortized
-
-### Costs and profit
-- **Ad spend (month m)**
-  - **Inputs**: ad_spend_schedule
-  - **Calc**: ad_spend_m = schedule(m)
-
-- **Ad manager fee (month m)**
-  - **Inputs**: ad_manager_monthly_fee
-  - **Calc**: ad_manager_fee_m = ad_manager_monthly_fee if ad_spend_m > 0 else 0
-
-- **Profit (month m)**
-  - **Calc**: profit_m = net_revenue − ad_spend_m − ad_manager_fee_m
-
-- **Cumulative net profit** = Σ profit_m up to m
-- **Cumulative ad spend** = Σ ad_spend_m up to m
-
-### Unit economics & milestones (from the time series)
-- **ROAS (net)** = Σ net_revenue ÷ Σ ad_spend
-- **Blended CAC (paid only)** = Σ ad_spend ÷ Σ new_free_paid
-- **Payback month** = first m where cumulative_net_profit > 0
-        """
-    )
+    try:
+        with open(Path(__file__).parent / "equation.md", "r", encoding="utf-8") as f:
+            st.markdown(f.read())
+    except Exception:
+        st.info("Formulas documentation not found.")
 
 
 render_brand_header()
@@ -1763,7 +1126,7 @@ with tab_sim:
         has_fit_q = st.session_state.get("pwlog_fit") is not None
         include_fit_q = st.checkbox("Include model fit", value=bool(has_fit_q), key="quick_include_fit")
         include_sim_q = st.checkbox("Include simulation results", value=False, key="quick_include_sim")
-        bundle_q = _collect_session_bundle(include_fit_q, include_sim_q)
+        bundle_q = collect_session_bundle(include_fit_q, include_sim_q)
         st.download_button(
             "Export my config (.zip)",
             data=bundle_q,
@@ -1774,7 +1137,7 @@ with tab_sim:
         uploaded_q = st.file_uploader("Restore session bundle (.zip)", type=["zip"], key="quick_session_bundle")
         if uploaded_q is not None:
             try:
-                _apply_session_bundle(uploaded_q)
+                apply_session_bundle(uploaded_q)
                 st.success("Session restored. Switching to Simulator…")
                 st.session_state["switch_to_sim"] = True
                 st.rerun()
