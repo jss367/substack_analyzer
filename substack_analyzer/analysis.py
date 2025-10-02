@@ -45,7 +45,13 @@ def read_series(file_like, has_header: bool, date_sel, count_sel) -> pd.Series:
 
 
 def plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, series_title: str) -> alt.Chart:
-    base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(x=alt.X("date:T", title="Date"))
+    base = alt.Chart(plot_df.reset_index().rename(columns={"index": "date"})).encode(
+        x=alt.X(
+            "date:T",
+            title="Date",
+            axis=alt.Axis(format="%b %Y"),
+        )
+    )
     left_series = [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in plot_df.columns]
     layers = []
     if left_series:
@@ -55,7 +61,11 @@ def plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, se
             .encode(
                 y=alt.Y("Value:Q", axis=alt.Axis(title="Total / Free")),
                 color=alt.Color("Series:N", scale=alt.Scale(scheme="tableau10"), title=series_title),
-                tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("Series:N"), alt.Tooltip("Value:Q")],
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date", format="%b %Y"),
+                    alt.Tooltip("Series:N"),
+                    alt.Tooltip("Value:Q"),
+                ],
             )
         )
         layers.append(left)
@@ -66,7 +76,11 @@ def plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, se
             .encode(
                 y=alt.Y("Value:Q", axis=alt.Axis(title="Paid", orient="right"), scale=alt.Scale(zero=True)),
                 color=alt.Color("Series:N", scale=alt.Scale(range=["#DB4437"]), title=series_title),
-                tooltip=[alt.Tooltip("date:T", title="Date"), alt.Tooltip("Series:N"), alt.Tooltip("Value:Q")],
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date", format="%b %Y"),
+                    alt.Tooltip("Series:N"),
+                    alt.Tooltip("Value:Q"),
+                ],
             )
         )
         layers.append(right)
@@ -80,7 +94,15 @@ def plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, se
             markers = (
                 alt.Chart(ev2)
                 .mark_rule(color="#8e44ad", size=3)
-                .encode(x="date:T", tooltip=["date:T", "type:N", "notes:N", "cost:Q"])
+                .encode(
+                    x="date:T",
+                    tooltip=[
+                        alt.Tooltip("date:T", title="Date", format="%b %Y"),
+                        "type:N",
+                        "notes:N",
+                        "cost:Q",
+                    ],
+                )
             )
             layers.append(markers)
 
