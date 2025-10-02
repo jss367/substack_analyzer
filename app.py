@@ -1270,7 +1270,7 @@ with tab_sim:
                 n_events = len(events_df.dropna(subset=["date"]))
             except Exception:
                 n_events = len(events_df)
-            bullets.append(f"- Stage 2 (events_df): {n_events} events annotated")
+            bullets.append(f"- Stage 2 (events_df): {n_events} {'event' if n_events == 1 else 'events'} annotated")
         if cov_df is not None:
             bullets.append("- Stage 2 (covariates_df): ad spend indexed monthly")
         if feat_df is not None and not getattr(feat_df, "empty", True):
