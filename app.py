@@ -728,6 +728,91 @@ def sidebar_inputs() -> SimulationInputs:
             key="annual_share",
         )
 
+    # Ad response feature parameters (used in Stage 2 feature building)
+    with st.sidebar.expander("Ad response (features)", expanded=False):
+        lam_sb = slider_state(
+            "Adstock lambda (carryover)",
+            min_value=0.0,
+            max_value=0.99,
+            default_value=float(_get_state("adstock_lambda", 0.5)),
+            step=0.01,
+            key="adstock_lambda",
+        )
+        theta_sb = number_input_state(
+            "Log transform theta",
+            min_value=1.0,
+            default_value=float(_get_state("ad_log_theta", 500.0)),
+            step=50.0,
+            key="ad_log_theta",
+        )
+        # Persist explicitly (helpers already set session state when not present)
+        st.session_state["adstock_lambda"] = float(lam_sb)
+        st.session_state["ad_log_theta"] = float(theta_sb)
+
+    # Quick Fit parameters (read from fit; allow manual override for what-if scenarios)
+    with st.sidebar.expander("Quick Fit parameters", expanded=False):
+        fit = st.session_state.get("pwlog_fit")
+        if fit is None:
+            st.caption("No Quick Fit available yet. Run Quick Fit on the Estimators tab.")
+        else:
+            try:
+                k_val = number_input_state(
+                    "K (carrying capacity)",
+                    min_value=0.0,
+                    default_value=float(getattr(fit, "carrying_capacity", 0.0)),
+                    step=100.0,
+                    key="quickfit_K",
+                )
+                gp = number_input_state(
+                    "gamma_pulse",
+                    min_value=-10.0,
+                    max_value=10.0,
+                    default_value=float(getattr(fit, "gamma_pulse", 0.0)),
+                    step=0.001,
+                    key="quickfit_gamma_pulse",
+                )
+                gs = number_input_state(
+                    "gamma_step",
+                    min_value=-10.0,
+                    max_value=10.0,
+                    default_value=float(getattr(fit, "gamma_step", 0.0)),
+                    step=0.001,
+                    key="quickfit_gamma_step",
+                )
+                gx0 = getattr(fit, "gamma_exog", None)
+                if gx0 is not None:
+                    gx = number_input_state(
+                        "gamma_exog (log ad)",
+                        min_value=-10.0,
+                        max_value=10.0,
+                        default_value=float(gx0),
+                        step=0.001,
+                        key="quickfit_gamma_exog",
+                    )
+                    st.session_state["quickfit_gamma_exog"] = float(gx)
+
+                # Segment growth rates r_j
+                r_list = list(getattr(fit, "segment_growth_rates", []) or [])
+                r_over = []
+                for j, rj in enumerate(r_list, start=1):
+                    r_val = number_input_state(
+                        f"r segment {j}",
+                        min_value=-10.0,
+                        max_value=10.0,
+                        default_value=float(rj),
+                        step=0.001,
+                        key=f"quickfit_r_{j}",
+                    )
+                    r_over.append(float(r_val))
+
+                # Persist overrides
+                st.session_state["quickfit_K"] = float(k_val)
+                st.session_state["quickfit_gamma_pulse"] = float(gp)
+                st.session_state["quickfit_gamma_step"] = float(gs)
+                st.session_state["quickfit_r"] = r_over
+            except Exception:
+                st.caption("Quick Fit parameters available, but could not render editor.")
+
     return SimulationInputs(
         starting_free_subscribers=int(start_free),
         starting_premium_subscribers=int(start_premium),
