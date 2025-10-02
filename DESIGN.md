@@ -1,5 +1,7 @@
 # Substack Growth Modeling — System Design (State‑Space/Bayesian)
 
+[IN PROGRESS]
+
 This updates the original design to a structural, _adds–churn_ model with saturation, interventions (shoutouts/ads), and explicit uncertainty via a Bayesian state‑space approach. It supports realistic phases (slow start → spikes → paid acquisition → saturation), scenario planning, and calibrated forecasts.
 
 ---
