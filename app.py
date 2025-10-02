@@ -1128,20 +1128,15 @@ def render_data_import() -> None:
             st.error(f"Estimation failed: {e}")
 
 
-def render_outputs_formulas() -> None:
-    st.subheader("Stage 8: Outputs and formulas")
-
-
 render_brand_header()
 
 # Tabs
 with st.container():
-    tab_import, tab_sim, tab_est, tab_out, tab_save, tab_stages, tab_help = st.tabs(
+    tab_import, tab_sim, tab_est, tab_save, tab_stages, tab_help = st.tabs(
         [
             "Data Import",
             "Simulator",
             "Estimators",
-            "Outputs & Formulas",
             "Save / Load",
             "Stages",
             "Help",
@@ -1204,9 +1199,6 @@ with tab_sim:
 
 with tab_est:
     render_estimators()
-
-with tab_out:
-    render_outputs_formulas()
 
 with tab_save:
     render_save_load()
