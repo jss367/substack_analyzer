@@ -20,11 +20,30 @@ def _fit_slope_per_month(values: pd.Series) -> float:
 
 def compute_segment_slopes(series: pd.Series, breakpoints: list[int]) -> list[SegmentSlope]:
     s = series.dropna()
-    if not breakpoints:
-        breakpoints = [s.shape[0]]
+    n = s.shape[0]
+    if n == 0:
+        return []
+
+    # Normalise breakpoints so that we do not attempt to index out of range when
+    # computing start/end dates. Users of the API can provide arbitrary
+    # breakpoints (including unsorted or out-of-bounds values), so we defensively
+    # clamp them to the valid range and ensure they are strictly increasing.
+    cleaned_breaks: list[int] = []
+    for bp in sorted(set(int(b) for b in breakpoints or [])):
+        if bp <= 0 or bp > n:
+            continue
+        if cleaned_breaks and bp <= cleaned_breaks[-1]:
+            continue
+        cleaned_breaks.append(bp)
+
+    if not cleaned_breaks or cleaned_breaks[-1] != n:
+        cleaned_breaks.append(n)
+
     segments: list[SegmentSlope] = []
     start = 0
-    for bp in breakpoints:
+    for bp in cleaned_breaks:
+        if start >= n:
+            break
         seg_vals = s.iloc[start:bp]
         slope = _fit_slope_per_month(seg_vals)
         segments.append(

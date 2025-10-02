@@ -11,6 +11,14 @@ def test_compute_segment_slopes_basic():
     assert segs[0].start_index == 0 and segs[0].end_index == 2
 
 
+def test_compute_segment_slopes_ignores_invalid_breakpoints():
+    idx = pd.period_range("2024-01", periods=5, freq="M").to_timestamp("M")
+    s = pd.Series([5, 7, 9, 12, 15], index=idx)
+    # Includes duplicates, values outside the valid range and unsorted input.
+    segs = compute_segment_slopes(s, breakpoints=[0, 10, 3, 2, 3])
+    assert [(seg.start_index, seg.end_index) for seg in segs] == [(0, 1), (2, 2), (3, 4)]
+
+
 def test_slope_around():
     idx = pd.period_range("2024-01", periods=12, freq="M").to_timestamp("M")
     s = pd.Series(range(100, 112), index=idx)
