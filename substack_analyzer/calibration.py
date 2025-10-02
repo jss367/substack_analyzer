@@ -231,3 +231,61 @@ def forecast_piecewise_logistic(
         # Only apply pulse in first step
         gamma_pulse = 0.0
     return np.array(values[1:], dtype=float)
+
+
+def fitted_series_from_params(
+    total_series: pd.Series,
+    breakpoints: Optional[List[int]],
+    carrying_capacity: float,
+    segment_growth_rates: Sequence[float],
+    events_df: Optional[pd.DataFrame] = None,
+    extra_exog: Optional[pd.Series] = None,
+    gamma_pulse: float = 0.0,
+    gamma_step: float = 0.0,
+    gamma_exog: Optional[float] = None,
+) -> pd.Series:
+    """Recompute a fitted series using explicit parameters (no refit).
+
+    Applies the same discrete dynamic used in fitting, aligned to month-end index.
+    """
+    s = _ensure_month_end_index(total_series)
+    if s.size == 0:
+        return s
+
+    # Align helper arrays to deltas index
+    y_index = s.index[1:]
+    pulse, step = _event_regressors(y_index, events_df)
+
+    exog = None
+    if extra_exog is not None:
+        try:
+            exog = extra_exog.reindex(y_index).astype(float).to_numpy()
+            exog = np.where(np.isfinite(exog), exog, 0.0)
+        except Exception:
+            exog = None
+
+    # Segment bounds on the original series index
+    seg_bounds = _segments_from_breakpoints(len(s), list(breakpoints or []))
+    r_list = list(segment_growth_rates)
+    if len(r_list) < len(seg_bounds):
+        # Pad with last known rate
+        r_list = r_list + [r_list[-1] if r_list else 0.0] * (len(seg_bounds) - len(r_list))
+
+    s_hat = [float(s.iloc[0])]
+    for t in range(1, s.size):
+        x_t = s_hat[-1] * (1.0 - s_hat[-1] / float(carrying_capacity))
+        # Determine segment for delta at t
+        seg_idx = 0
+        for j, (a, b) in enumerate(seg_bounds):
+            if (t - 1) >= a and (t - 1) <= b:
+                seg_idx = j
+                break
+        delta = float(r_list[seg_idx]) * x_t
+        if t - 1 < len(pulse):
+            delta += float(gamma_pulse) * float(pulse[t - 1])
+            delta += float(gamma_step) * float(step[t - 1])
+        if exog is not None and (t - 1) < len(exog) and gamma_exog is not None:
+            delta += float(gamma_exog) * float(exog[t - 1])
+        s_hat.append(max(s_hat[-1] + delta, 0.0))
+
+    return pd.Series(s_hat, index=s.index)
