@@ -1032,9 +1032,6 @@ def render_data_import() -> None:
                 with suppress(Exception):
                     emit_observations(plot_df)
 
-                # Stage 2: Events editor before plotting so markers reflect latest edits
-                events_editor()
-
                 # Chart controls
                 use_dual_axis = st.checkbox(
                     "Use separate right axis for Paid",
@@ -1051,6 +1048,9 @@ def render_data_import() -> None:
                     plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title
                 )
                 st.altair_chart(chart, use_container_width=True)
+
+                # Stage 2: Events editor (moved below the graph per request)
+                events_editor()
 
                 # Trend detection on Total if present else Free
                 target_col = "Total" if "Total" in plot_df.columns else ("Free" if "Free" in plot_df.columns else None)
@@ -1082,11 +1082,6 @@ def render_data_import() -> None:
 
 def render_outputs_formulas() -> None:
     st.subheader("Stage 8: Outputs and formulas")
-    try:
-        with open(Path(__file__).parent / "equation.md", "r", encoding="utf-8") as f:
-            st.markdown(f.read())
-    except Exception:
-        st.info("Formulas documentation not found.")
 
 
 render_brand_header()
