@@ -60,17 +60,3 @@ def format_date_badges(dates) -> str:
             f"{label}</span>"
         )
     return "".join(items)
-
-
-def number_input_state(label: str, *, key: str, default_value, **kwargs):
-    kwargs["key"] = key
-    if key not in st.session_state:
-        kwargs["value"] = default_value
-    return st.number_input(label, **kwargs)
-
-
-def slider_state(label: str, *, key: str, default_value, **kwargs):
-    kwargs["key"] = key
-    if key not in st.session_state:
-        kwargs["value"] = default_value
-    return st.slider(label, **kwargs)
