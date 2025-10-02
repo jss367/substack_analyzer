@@ -189,7 +189,7 @@ def events_editor() -> None:
     st.caption("Track shout-outs, ad campaigns, launches, etc. Dates must match the series timeline.")
     # Offer to add detected change dates directly here
     with st.container():
-        add_col1, add_col2 = st.columns([1, 3])
+        add_col1, _ = st.columns([1, 3])
         with add_col1:
             if st.button("Add detected change dates to Events"):
                 try:
@@ -217,9 +217,7 @@ def events_editor() -> None:
                         st.rerun()
                 except Exception:
                     st.info("Could not add detected dates. Try again after loading data.")
-    default_events = pd.DataFrame(
-        [{"date": None, "type": "Ad spend", "persistence": "Transient", "notes": "", "cost": 0.0}]
-    )
+    default_events = pd.DataFrame(columns=["date", "type", "persistence", "notes", "cost"])
     events_df = st.session_state.get("events_df", default_events)
 
     edited = st.data_editor(
