@@ -923,11 +923,6 @@ Use the Estimators tab to compute these, then plug them into the Simulator sideb
     )
 
 
-def _read_series(file, has_header: bool, date_sel, count_sel) -> pd.Series:
-    # delegating to analysis.read_series for parsing
-    return read_series(file, has_header, date_sel, count_sel)
-
-
 def render_save_load() -> None:
     st.subheader("Save / Load session")
     st.caption("Download a portable bundle to save your work, or upload to restore it later.")
