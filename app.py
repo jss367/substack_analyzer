@@ -361,7 +361,7 @@ def adds_and_churn_ui(plot_df: pd.DataFrame) -> None:
 
 
 def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
-    st.subheader("Stage 4: Model fitting (Quick Fit)")
+    st.subheader("Stage 4: Fit model")
     st.caption("Fits on Total (preferred) or Free if Total is unavailable. Uses detected change points as segments.")
     horizon_ahead = st.slider("Forecast months ahead", 0, 36, 12, 1)
     if st.button("Fit model and overlay"):
@@ -524,7 +524,7 @@ def metrics_and_apply_ui(all_series, paid_series, net_only: bool) -> None:
         st.session_state["spend_mode_index"] = 1
         st.session_state["conv_new"] = 0.0
         st.session_state["horizon_months"] = max(int(_get_state("horizon_months", 60)), 24)
-        # Ensure the Simulator shows an equation even if Quick Fit wasn't run
+        # Ensure the Simulator shows an equation even if model fit wasn't run
         if "growth_equation_latex" not in st.session_state:
             st.session_state["growth_equation_latex"] = (
                 r"F_t = F_{t-1}(1 - c_f) + F_{t-1}\,g + \frac{AdSpend_t}{CAC} - conv_t\\"
@@ -745,15 +745,12 @@ def sidebar_inputs() -> SimulationInputs:
             step=50.0,
             key="ad_log_theta",
         )
-        # Persist explicitly (helpers already set session state when not present)
-        st.session_state["adstock_lambda"] = float(lam_sb)
-        st.session_state["ad_log_theta"] = float(theta_sb)
 
-    # Quick Fit parameters (read from fit; allow manual override for what-if scenarios)
-    with st.sidebar.expander("Quick Fit parameters", expanded=False):
+    # Model fit parameters (read from fit; allow manual override for what-if scenarios)
+    with st.sidebar.expander("Model fit parameters", expanded=False):
         fit = st.session_state.get("pwlog_fit")
         if fit is None:
-            st.caption("No Quick Fit available yet. Run Quick Fit on the Estimators tab.")
+            st.caption("No model fit available yet. Run Model fit on the Estimators tab.")
         else:
             try:
                 k_val = number_input_state(
@@ -761,7 +758,7 @@ def sidebar_inputs() -> SimulationInputs:
                     min_value=0.0,
                     default_value=float(getattr(fit, "carrying_capacity", 0.0)),
                     step=100.0,
-                    key="quickfit_K",
+                    key="modelfit_K",
                 )
                 gp = number_input_state(
                     "gamma_pulse",
@@ -769,7 +766,7 @@ def sidebar_inputs() -> SimulationInputs:
                     max_value=10.0,
                     default_value=float(getattr(fit, "gamma_pulse", 0.0)),
                     step=0.001,
-                    key="quickfit_gamma_pulse",
+                    key="modelfit_gamma_pulse",
                 )
                 gs = number_input_state(
                     "gamma_step",
@@ -777,7 +774,7 @@ def sidebar_inputs() -> SimulationInputs:
                     max_value=10.0,
                     default_value=float(getattr(fit, "gamma_step", 0.0)),
                     step=0.001,
-                    key="quickfit_gamma_step",
+                    key="modelfit_gamma_step",
                 )
                 gx0 = getattr(fit, "gamma_exog", None)
                 if gx0 is not None:
@@ -787,9 +784,8 @@ def sidebar_inputs() -> SimulationInputs:
                         max_value=10.0,
                         default_value=float(gx0),
                         step=0.001,
-                        key="quickfit_gamma_exog",
+                        key="modelfit_gamma_exog",
                     )
-                    st.session_state["quickfit_gamma_exog"] = float(gx)
 
                 # Segment growth rates r_j
                 r_list = list(getattr(fit, "segment_growth_rates", []) or [])
@@ -801,17 +797,14 @@ def sidebar_inputs() -> SimulationInputs:
                         max_value=10.0,
                         default_value=float(rj),
                         step=0.001,
-                        key=f"quickfit_r_{j}",
+                        key=f"modelfit_r_{j}",
                     )
                     r_over.append(float(r_val))
 
-                # Persist overrides
-                st.session_state["quickfit_K"] = float(k_val)
-                st.session_state["quickfit_gamma_pulse"] = float(gp)
-                st.session_state["quickfit_gamma_step"] = float(gs)
-                st.session_state["quickfit_r"] = r_over
+                # Persist aggregate list (non-widget key) for convenience
+                st.session_state["modelfit_r"] = r_over
             except Exception:
-                st.caption("Quick Fit parameters available, but could not render editor.")
+                st.caption("Model fit parameters available, but could not render editor.")
 
     return SimulationInputs(
         starting_free_subscribers=int(start_free),
@@ -1297,13 +1290,13 @@ with tab_sim:
                 gp = getattr(fit, "gamma_pulse", None)
                 gs = getattr(fit, "gamma_step", None)
                 gx = getattr(fit, "gamma_exog", None)
-                bullets.append(f"- Stage 4 (Quick Fit): K={k_disp}; r by segment=[{rs}]")
+                bullets.append(f"- Stage 4 (Model fit): K={k_disp}; r by segment=[{rs}]")
                 if gp is not None and gs is not None:
                     bullets.append(f"  - Events: gamma_pulse={gp:0.3f}, gamma_step={gs:0.3f}")
                 if gx is not None:
                     bullets.append(f"  - Exogenous (log ad effect): gamma_exog={gx:0.3f}")
             except Exception:
-                bullets.append("- Stage 4 (Quick Fit): available")
+                bullets.append("- Stage 4 (Model fit): available")
         if not bullets:
             bullets.append("- No prior stages detected yet. Use the Estimators tab to run 1–5.")
         st.markdown("\n".join(bullets))
@@ -1312,7 +1305,7 @@ with tab_sim:
         nxt = [
             "- Set assumptions in the sidebar: growth, churn, conversion, pricing, CAC, ad spend.",
             "- Run the Simulator below to project subscribers, revenue, ROAS, and payback.",
-            "- Optional: use Quick Fit to calibrate growth dynamics; advanced Bayesian fit coming soon.",
+            "- Optional: use the model fit to calibrate growth dynamics; advanced Bayesian fit coming soon.",
         ]
         st.markdown("\n".join(nxt))
     with st.expander("Save / Load (quick access)", expanded=False):
@@ -1364,7 +1357,7 @@ with tab_stages:
 7. **Cohort & Finance Simulator**: Monthly KPIs, ROAS, CAC, payback. Outputs `sim_df`.
 8. **Outputs & Docs**: Formulas and downloadable artifacts.
 
-Status: Stages 1–3 (import, events, quick estimators) and Quick Fit are implemented. Pro Fit (Bayesian), diagnostics, and scenario planner are in progress.
+Status: Stages 1–3 (import, events, quick estimators) and Model fit are implemented. Pro Fit (Bayesian), diagnostics, and scenario planner are in progress.
         """
     )
 
