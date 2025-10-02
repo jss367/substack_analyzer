@@ -173,35 +173,50 @@ def trend_detection_ui(plot_df: pd.DataFrame, target_col: Optional[str]) -> list
         st.markdown(f"**Detected change dates (on {target_col}):**")
         st.markdown(_format_date_badges(dates), unsafe_allow_html=True)
         st.caption("Tip: To adjust these, use the draggable timeline below (purple bars).")
-        if st.button("Add detected change dates to Events"):
-            try:
-                change_dates = [s_idx[i - 1] if i > 0 else s_idx[i] for i in bkps]
-                seeded = pd.DataFrame(
-                    {
-                        "date": [pd.to_datetime(d).date() for d in change_dates],
-                        "type": ["Change"] * len(change_dates),
-                        "notes": [f"Detected change in {target_col}"] * len(change_dates),
-                        "cost": [0.0] * len(change_dates),
-                    }
-                )
-                existing = st.session_state.get("events_df")
-                merged = (
-                    pd.concat([existing, seeded], ignore_index=True)
-                    if (existing is not None and not existing.empty)
-                    else seeded
-                )
-                st.session_state["events_df"] = merged
-                st.success("Added detected change dates to Events.")
-                # Immediately rerun so upstream charts re-render with new event markers
-                st.rerun()
-            except Exception:
-                st.info("Could not add detected dates. Try again after loading data.")
+        # Persist detected dates for the Events editor button
+        try:
+            change_dates_for_events = [s_idx[i - 1] if i > 0 else s_idx[i] for i in bkps if i < len(s_idx)]
+            st.session_state["detected_change_dates"] = [pd.to_datetime(d) for d in change_dates_for_events]
+            st.session_state["detected_target_col"] = target_col
+        except Exception:
+            st.session_state.pop("detected_change_dates", None)
+            st.session_state.pop("detected_target_col", None)
     return bkps or []
 
 
 def events_editor() -> None:
     st.subheader("Stage 2: Events & annotations")
     st.caption("Track shout-outs, ad campaigns, launches, etc. Dates must match the series timeline.")
+    # Offer to add detected change dates directly here
+    with st.container():
+        add_col1, add_col2 = st.columns([1, 3])
+        with add_col1:
+            if st.button("Add detected change dates to Events"):
+                try:
+                    change_dates = [pd.to_datetime(d).date() for d in st.session_state.get("detected_change_dates", [])]
+                    if not change_dates:
+                        st.info("No detected change dates available. Run detection below.")
+                    else:
+                        target_col = st.session_state.get("detected_target_col", "series")
+                        seeded = pd.DataFrame(
+                            {
+                                "date": change_dates,
+                                "type": ["Change"] * len(change_dates),
+                                "notes": [f"Detected change in {target_col}"] * len(change_dates),
+                                "cost": [0.0] * len(change_dates),
+                            }
+                        )
+                        existing = st.session_state.get("events_df")
+                        merged = (
+                            pd.concat([existing, seeded], ignore_index=True)
+                            if (existing is not None and not existing.empty)
+                            else seeded
+                        )
+                        st.session_state["events_df"] = merged
+                        st.success("Added detected change dates to Events.")
+                        st.rerun()
+                except Exception:
+                    st.info("Could not add detected dates. Try again after loading data.")
     default_events = pd.DataFrame(
         [{"date": None, "type": "Ad spend", "persistence": "Transient", "notes": "", "cost": 0.0}]
     )
