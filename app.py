@@ -397,10 +397,16 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
             if getattr(fit, "gamma_exog", None) is not None:
                 st.caption(f"Exogenous effect (log ad): γ_exog={fit.gamma_exog:0.4f}")
 
+            # Build and persist the growth equation for later display (e.g., in Simulator tab)
+            eq = (
+                r"\Delta S_t = r_{seg(t)}\, S_{t-1} \left(1 - \frac{S_{t-1}}{K}\right) "
+                r"+ \gamma_{pulse}\,pulse_t + \gamma_{step}\,step_t"
+            )
+            if getattr(fit, "gamma_exog", None) is not None:
+                eq += r" + \gamma_{exog}\,x_t"
+            st.session_state["growth_equation_latex"] = eq
+
             with st.expander("Model equation and parameters", expanded=False):
-                eq = r"\Delta S_t = r_{seg(t)}\, S_{t-1} \left(1 - \frac{S_{t-1}}{K}\right) + \gamma_{pulse}\,pulse_t + \gamma_{step}\,step_t"
-                if getattr(fit, "gamma_exog", None) is not None:
-                    eq += r" + \gamma_{exog}\,x_t"
                 st.latex(eq)
                 st.markdown("**Fitted parameters**")
                 st.markdown(f"- **K (capacity)**: {fit.carrying_capacity:,.0f}")
@@ -515,6 +521,14 @@ def metrics_and_apply_ui(all_series, paid_series, net_only: bool) -> None:
         st.session_state["spend_mode_index"] = 1
         st.session_state["conv_new"] = 0.0
         st.session_state["horizon_months"] = max(int(_get_state("horizon_months", 60)), 24)
+        # Ensure the Simulator shows an equation even if Quick Fit wasn't run
+        if "growth_equation_latex" not in st.session_state:
+            st.session_state["growth_equation_latex"] = (
+                r"F_t = F_{t-1}(1 - c_f) + F_{t-1}\,g + \frac{AdSpend_t}{CAC} - conv_t\\"
+                r"P_t = P_{t-1}(1 - c_p) + conv_t\\"
+                r"conv_t = (new^{free}_t)\,p_{new} + F_{t-1}\,p_{ongoing},\\"
+                r"\quad new^{free}_t = F_{t-1}\,g + \frac{AdSpend_t}{CAC}"
+            )
         st.session_state["switch_to_sim"] = True
         st.success("Applied. Switching to Simulator…")
         st.rerun()
@@ -1143,6 +1157,21 @@ with tab_sim:
     sim_df = result.monthly
     st.session_state["sim_df"] = sim_df
     st.subheader("Stage 7: Cohort & Finance Simulator")
+    # If available, show the growth equation selected on the data/fit tab
+    _eq = st.session_state.get("growth_equation_latex")
+    if _eq:
+        st.markdown("**Current growth equation**")
+        st.latex(_eq)
+    else:
+        # Fallback: show the simulator's MVP equations
+        st.markdown("**Current growth equation**")
+        eq_sim = (
+            r"F_t = F_{t-1}(1 - c_f) + F_{t-1}\,g + \frac{AdSpend_t}{CAC} - conv_t\\"
+            r"P_t = P_{t-1}(1 - c_p) + conv_t\\"
+            r"conv_t = (new^{free}_t)\,p_{new} + F_{t-1}\,p_{ongoing},\\"
+            r"\quad new^{free}_t = F_{t-1}\,g + \frac{AdSpend_t}{CAC}"
+        )
+        st.latex(eq_sim)
     with st.expander("Save / Load (quick access)", expanded=False):
         has_fit_q = st.session_state.get("pwlog_fit") is not None
         include_fit_q = st.checkbox("Include model fit", value=bool(has_fit_q), key="quick_include_fit")
