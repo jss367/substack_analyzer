@@ -202,7 +202,9 @@ def trend_detection_ui(plot_df: pd.DataFrame, target_col: Optional[str]) -> list
 def events_editor() -> None:
     st.subheader("Stage 2: Events & annotations")
     st.caption("Track shout-outs, ad campaigns, launches, etc. Dates must match the series timeline.")
-    default_events = pd.DataFrame([{"date": None, "type": "Ad spend", "notes": "", "cost": 0.0}])
+    default_events = pd.DataFrame(
+        [{"date": None, "type": "Ad spend", "persistence": "Transient", "notes": "", "cost": 0.0}]
+    )
     events_df = st.session_state.get("events_df", default_events)
 
     edited = st.data_editor(
@@ -211,7 +213,20 @@ def events_editor() -> None:
         column_config={
             "date": st.column_config.DateColumn("Date"),
             "type": st.column_config.SelectboxColumn(
-                "Type", options=["Ad spend", "Shout-out", "Other"], width="medium"
+                "Type",
+                options=[
+                    "Ad spend",
+                    "Shout-out",
+                    "Viral post",
+                    "Launch",
+                    "Paywall change",
+                    "Change",
+                    "Other",
+                ],
+                width="medium",
+            ),
+            "persistence": st.column_config.SelectboxColumn(
+                "Persistence", options=["Transient", "Persistent"], width="medium"
             ),
             "notes": st.column_config.TextColumn("Notes", width="large"),
             "cost": st.column_config.NumberColumn(
@@ -222,6 +237,22 @@ def events_editor() -> None:
         key="events_editor",
     )
     with suppress(Exception):
+        # Auto-fill persistence from type when not provided
+        if "persistence" not in edited.columns:
+            edited["persistence"] = None
+        type_to_persistence = {
+            "ad spend": "Transient",
+            "ad": "Transient",
+            "shout-out": "Transient",
+            "viral post": "Transient",
+            "launch": "Persistent",
+            "paywall change": "Persistent",
+            "change": "Transient",
+        }
+        with suppress(Exception):
+            typed_lower = edited.get("type").astype(str).str.lower()
+            need_fill = edited.get("persistence").isna() | (edited.get("persistence").astype(str).str.len() == 0)
+            edited.loc[need_fill, "persistence"] = typed_lower.map(type_to_persistence)
         if "cost" in edited.columns:
             edited["cost"] = pd.to_numeric(edited["cost"], errors="coerce")
         if "date" in edited.columns:

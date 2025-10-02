@@ -160,8 +160,15 @@ def build_events_features(plot_df: pd.DataFrame, lam: float, theta: float, ad_fi
             cost = float(r.get("cost", 1.0) or 1.0)
             kind = str(r.get("type", ""))
             weight = cost if kind.lower() in {"ad spend", "ad"} else 1.0
-            pulse.loc[d] += float(weight)
-            step.loc[d:] += 1.0
+            persistence = str(r.get("persistence", "")).strip().lower()
+            if persistence == "persistent":
+                step.loc[d:] += 1.0
+            elif persistence == "transient":
+                pulse.loc[d] += float(weight)
+            else:
+                # Backward-compatibility: if unspecified, treat as both
+                pulse.loc[d] += float(weight)
+                step.loc[d:] += 1.0
 
     ad_spend = pd.Series(0.0, index=monthly_index, name="ad_spend")
     if ad_file is not None:

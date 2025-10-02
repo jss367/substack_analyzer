@@ -60,15 +60,24 @@ def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]
         kind = str(row.get("type", ""))
         # Optional: use cost as weight for pulse; default 1.0
         weight = float(row.get("cost", 1.0) or 1.0)
-        # Pulse at the event month
+        persistence = str(row.get("persistence", "")).strip().lower()
         if when in index:
             i = int(index.get_loc(when))
-            if kind.lower().startswith("ad ") or kind.lower() == "ad spend":
-                pulse[i] += weight
+            if persistence == "persistent":
+                step[index >= when] += 1.0
+            elif persistence == "transient":
+                # Pulse at the event month
+                if kind.lower().startswith("ad ") or kind.lower() == "ad spend":
+                    pulse[i] += weight
+                else:
+                    pulse[i] += 1.0
             else:
-                pulse[i] += 1.0
-        # Step from event month onward
-        step[index >= when] += 1.0
+                # Backward-compatibility: both
+                if kind.lower().startswith("ad ") or kind.lower() == "ad spend":
+                    pulse[i] += weight
+                else:
+                    pulse[i] += 1.0
+                step[index >= when] += 1.0
     return pulse, step
 
 
