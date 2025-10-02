@@ -25,3 +25,11 @@ We also need to look for changes in YOUR growth function. The computer could fin
 Then, we've got the shocks labeled, and any changes in growth found. Then, the computer estimates the growth rate for the different time periods. (At the moment, we keep K fixed. In the future, we can change it).
 
 Then, we display our whole equation.
+
+
+
+
+
+Then we need to figure out the benefits of our adspend. To do that, we need to find beta, theta, and lambda.
+
+
