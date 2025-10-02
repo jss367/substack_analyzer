@@ -930,11 +930,6 @@ def _read_series(file, has_header: bool, date_sel, count_sel) -> pd.Series:
     return read_series(file, has_header, date_sel, count_sel)
 
 
-def _snapshot_state() -> dict:
-    # Deprecated: kept for compatibility; persistence moved to module
-    return {}
-
-
 def render_save_load() -> None:
     st.subheader("Save / Load session")
     st.caption("Download a portable bundle to save your work, or upload to restore it later.")
