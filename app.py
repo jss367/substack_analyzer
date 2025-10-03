@@ -222,7 +222,7 @@ def events_editor() -> None:
         events_df,
         num_rows="dynamic",
         column_config={
-            "date": st.column_config.DateColumn("Date"),
+            "date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
             "type": st.column_config.SelectboxColumn(
                 "Type",
                 options=[
@@ -247,6 +247,46 @@ def events_editor() -> None:
         use_container_width=True,
         key="events_editor",
     )
+    # Quick-add fallback for dates: a reliable date picker input
+    with st.expander("Quick add event", expanded=False):
+        with st.form("quick_add_event_form", clear_on_submit=True):
+            qa_date = st.date_input("Date (YYYY-MM-DD)")
+            qa_type = st.selectbox(
+                "Type",
+                [
+                    "Ad spend",
+                    "Shout-out",
+                    "Viral post",
+                    "Launch",
+                    "Paywall change",
+                    "Change",
+                    "Other",
+                ],
+            )
+            qa_persist = st.selectbox("Persistence", ["Transient", "Persistent"], index=0)
+            qa_cost = st.number_input("Cost ($)", min_value=0.0, step=10.0, value=0.0, format="%.2f")
+            qa_notes = st.text_input("Notes", value="")
+            submitted = st.form_submit_button("Add to Events")
+        if submitted and qa_date is not None:
+            try:
+                new_row = {
+                    "date": pd.to_datetime(qa_date).to_period("M").to_timestamp("M").date(),
+                    "type": qa_type,
+                    "persistence": qa_persist,
+                    "notes": qa_notes,
+                    "cost": float(qa_cost or 0.0),
+                }
+                existing = st.session_state.get("events_df")
+                merged = (
+                    pd.concat([existing, pd.DataFrame([new_row])], ignore_index=True)
+                    if (existing is not None and not getattr(existing, "empty", True))
+                    else pd.DataFrame([new_row])
+                )
+                st.session_state["events_df"] = merged
+                st.success("Event added.")
+                st.rerun()
+            except Exception:
+                st.info("Could not add the event. Please try again.")
     with suppress(Exception):
         # Auto-fill persistence from type when not provided
         if "persistence" not in edited.columns:
@@ -267,9 +307,8 @@ def events_editor() -> None:
         if "cost" in edited.columns:
             edited["cost"] = pd.to_numeric(edited["cost"], errors="coerce")
         if "date" in edited.columns:
-            edited["date"] = (
-                pd.to_datetime(edited["date"], errors="coerce").dt.to_period("M").dt.to_timestamp("M").dt.date
-            )
+            # Store raw calendar dates as entered; downstream steps will align to month-end as needed
+            edited["date"] = pd.to_datetime(edited["date"], errors="coerce").dt.date
     st.session_state["events_df"] = edited
 
 
