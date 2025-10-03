@@ -94,15 +94,16 @@ def plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, se
     if ev is not None and not ev.empty:
         ev2 = ev.dropna(subset=["date"]).copy()
         if not ev2.empty:
+            # Use exact event dates for the chart so edits in the table reflect immediately
             with suppress(Exception):
-                ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce")
             markers = (
                 alt.Chart(ev2)
                 .mark_rule(color="#8e44ad", size=3)
                 .encode(
                     x="date:T",
                     tooltip=[
-                        alt.Tooltip("date:T", title="Date", format="%b %Y"),
+                        alt.Tooltip("date:T", title="Date", format="%b %d, %Y"),
                         "type:N",
                         "notes:N",
                         "cost:Q",
