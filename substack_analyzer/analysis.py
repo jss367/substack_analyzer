@@ -49,7 +49,12 @@ def plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, se
         x=alt.X(
             "date:T",
             title="Date",
-            axis=alt.Axis(format="%b %Y"),
+            axis=alt.Axis(
+                labelExpr="timeFormat(datum.value, '%b %Y')",
+                labelAngle=0,
+                labelPadding=6,
+                titlePadding=10,
+            ),
         )
     )
     left_series = [c for c in (["Total", "Free"] if show_total else ["Free"]) if c in plot_df.columns]
@@ -106,7 +111,7 @@ def plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, se
             )
             layers.append(markers)
 
-    chart = alt.layer(*layers).properties(height=260)
+    chart = alt.layer(*layers).properties(height=260, padding={"bottom": 20, "left": 5, "right": 5, "top": 5})
     if use_dual_axis and ("Paid" in plot_df.columns):
         chart = chart.resolve_scale(y="independent")
     return chart

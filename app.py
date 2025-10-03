@@ -442,7 +442,13 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
                 {"Actual": fit_series_source, "Fitted": fitted_from_overrides.reindex(fit_series_source.index)}
             )
             base_overlay = alt.Chart(overlay_df.reset_index().rename(columns={"index": "date"})).encode(
-                x=alt.X("date:T", title="Date", axis=alt.Axis(format="%b %Y"))
+                x=alt.X(
+                    "date:T",
+                    title="Date",
+                    axis=alt.Axis(
+                        labelExpr="timeFormat(datum.value, '%b %Y')", labelAngle=0, labelPadding=6, titlePadding=10
+                    ),
+                )
             )
             actual_line = (
                 base_overlay.transform_fold(["Actual"], as_=["Series", "Value"])
@@ -507,7 +513,16 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
                     .transform_fold(["Actual", "Fitted", "Forecast"], as_=["Series", "Value"])
                     .mark_line()
                     .encode(
-                        x=alt.X("date:T", title="Date", axis=alt.Axis(format="%b %Y")),
+                        x=alt.X(
+                            "date:T",
+                            title="Date",
+                            axis=alt.Axis(
+                                labelExpr="timeFormat(datum.value, '%b %Y')",
+                                labelAngle=0,
+                                labelPadding=6,
+                                titlePadding=10,
+                            ),
+                        ),
                         y="Value:Q",
                         color="Series:N",
                     )
@@ -565,7 +580,19 @@ def tail_view_ui(
                 fit_t = (
                     alt.Chart(fit_df_t)
                     .mark_line(color="#7f8c8d")
-                    .encode(x=alt.X("date:T", title="Date", axis=alt.Axis(format="%b %Y")), y="Fit:Q")
+                    .encode(
+                        x=alt.X(
+                            "date:T",
+                            title="Date",
+                            axis=alt.Axis(
+                                labelExpr="timeFormat(datum.value, '%b %Y')",
+                                labelAngle=0,
+                                labelPadding=6,
+                                titlePadding=10,
+                            ),
+                        ),
+                        y="Fit:Q",
+                    )
                 )
                 base_chart = alt.layer(base_chart, fit_t).resolve_scale(y="independent").properties(height=240)
         except Exception:
