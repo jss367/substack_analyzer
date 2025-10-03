@@ -244,7 +244,8 @@ def fitted_series_from_params(
     gamma_step: float = 0.0,
     gamma_exog: Optional[float] = None,
 ) -> pd.Series:
-    """Recompute a fitted series using explicit parameters (no refit).
+    """
+    This takes the parameters and uses uses them to predict the future.
 
     Applies the same discrete dynamic used in fitting, aligned to month-end index.
     """

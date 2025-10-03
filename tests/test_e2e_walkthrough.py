@@ -30,14 +30,16 @@ def _make_synthetic_series(n_months: int = 48, seed: int = 7) -> pd.Series:
         delta = r * s * (1.0 - s / K) + rng.normal(0.0, 15.0)
         s = max(s + delta, 0.0)
         values.append(s)
-    return pd.Series(values, index=idx, name="Total")
+    s_total = pd.Series(values, index=idx, name="Total")
+    return s_total.round().astype(int)
 
 
-def _make_paid_from_total(total: pd.Series, frac: float = 0.08, seed: int = 3) -> pd.Series:
+def _make_paid_from_total(total: pd.Series, frac: float = 0.08, seed: int = 42) -> pd.Series:
     rng = np.random.default_rng(seed)
     paid = (total * frac).astype(float)
     noise = rng.normal(0.0, 5.0, len(paid))
     paid = (paid + noise).clip(lower=0.0)
+    paid = paid.round().astype(int)
     paid.name = "Paid"
     return paid
 
@@ -67,12 +69,12 @@ def test_e2e_walkthrough_headless():
 
     # Features (with exogenous)
     plot_df = pd.DataFrame({"Total": total}).set_index(total.index)
-    covariates_df, features_df = build_events_features(plot_df, lam=0.5, theta=500.0, ad_file=None)
+    covariates_df, features_df = build_events_features(plot_df, lam=0.5, theta=500.0, ad_file=None)  # remove???
     assert {"pulse", "step", "adstock", "ad_effect_log"}.issubset(features_df.columns)
     exog = features_df["ad_effect_log"]
 
     # Estimates (All+Paid branch)
-    est = compute_estimates(all_series=total, paid_series=paid, window_months=6)
+    est = compute_estimates(all_series=total, paid_series=paid, window_months=6)  # remove???
     assert "start_free" in est and "start_premium" in est and "organic_growth" in est
 
     # Fit piecewise logistic with events + exog
@@ -104,6 +106,8 @@ def test_e2e_walkthrough_headless():
     # Segment slopes sanity: at least one segment
     segs = compute_segment_slopes(total, breakpoints=bkps)
     assert len(segs) >= 1
+
+    # Good up to here. The simulation maybe not
 
     # Simulation sanity
     sim = simulate_growth(

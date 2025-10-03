@@ -115,6 +115,47 @@ def plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, se
 def compute_estimates(
     all_series: Optional[pd.Series], paid_series: Optional[pd.Series], window_months: int = 6
 ) -> dict:
+    """Derive starting levels and rate estimates from monthly subscriber series.
+
+    Computes lightweight, robust estimates to initialize the simulator and
+    calibrations. Works in two modes depending on which inputs are provided:
+
+    - All + Paid provided: Aligns both series, derives Free = All - Paid, and
+      computes median-of-tail rates on the last `window_months` months for
+      free growth and conversion proxy. Returns: `start_free`, `start_premium`,
+      `organic_growth`, `conv_ongoing`.
+    - Only All provided: Uses the All series and current session state's
+      `start_premium` (if any) to back out `start_free`, and computes
+      `organic_growth` from All deltas.
+    - Only Paid provided: Returns `start_premium` from the last observation.
+
+    Independently ensures churn defaults are present by reading
+    `churn_free` and `churn_prem` from `st.session_state` (default 0.01).
+
+    Parameters
+    ----------
+    all_series : Optional[pd.Series]
+        Monthly All (Total) subscribers indexed by month-end timestamps.
+    paid_series : Optional[pd.Series]
+        Monthly Paid subscribers indexed by month-end timestamps.
+    window_months : int, default 6
+        Tail window size used for median rate calculations.
+
+    Returns
+    -------
+    dict
+        A dictionary including some or all of the following keys depending on
+        inputs available: `start_free`, `start_premium`, `organic_growth`,
+        `conv_ongoing`, `churn_free`, `churn_prem`.
+
+    Notes
+    -----
+    - Rates are computed from first differences divided by previous levels and
+      then aggregated via median over the tail window to reduce outlier impact.
+    - Series are aligned on overlapping dates; if no overlap exists in the
+      All+Paid path, a ValueError is raised.
+    - Inputs are not modified; computations are performed on copies.
+    """
     estimates: dict = {}
 
     def _get_state(key: str, default):
