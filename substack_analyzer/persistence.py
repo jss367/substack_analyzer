@@ -186,3 +186,8 @@ def apply_session_bundle(file_like) -> None:
             if need.issubset(feat.columns):
                 feat["date"] = pd.to_datetime(feat["date"]).dt.to_period("M").dt.to_timestamp("M")
                 st.session_state["features_df"] = feat.set_index("date").sort_index()
+
+        # Ensure required keys exist even if the bundle lacks certain artifacts
+        # This helps in headless/test environments where session_state may not persist
+        if "import_total" not in st.session_state:
+            st.session_state["import_total"] = pd.Series(dtype=float)
