@@ -398,21 +398,44 @@ def adds_and_churn_ui(plot_df: pd.DataFrame) -> None:
 
 
 def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
+    """Stage 4: fit piecewise logistic, wire in exogenous feature, and draw overlay/forecast."""
     st.subheader("Stage 4: Fit model")
-    st.caption("Fits on Total (preferred) or Free if Total is unavailable. Uses detected change points as segments.")
+    st.caption(
+        "Fits on Total (preferred) or Free if Total is unavailable. "
+        "Uses detected change points as segments. If built, uses the ad-response exogenous feature."
+    )
+
+    # Controls
+    use_exog = False
+    features_df = st.session_state.get("features_df")
+    if isinstance(features_df, pd.DataFrame) and "ad_effect_log" in features_df.columns:
+        use_exog = st.checkbox("Use ad-response feature in fit (γ_exog·ad_effect_log)", value=True)
+
     horizon_ahead = st.slider("Forecast months ahead", 0, 36, 12, 1)
+
     if st.button("Fit model and overlay"):
         try:
+            # ----- choose series to fit -----
             fit_series_source = plot_df.get("Total") if "Total" in plot_df.columns else plot_df.get("Free")
             if fit_series_source is None or fit_series_source.empty:
                 st.info("Need Total or Free series to fit.")
                 return
+
+            # ----- optional exogenous regressor -----
+            extra_exog = None
+            if use_exog and isinstance(features_df, pd.DataFrame):
+                extra_exog = features_df["ad_effect_log"].astype(float)
+
+            # ----- fit -----
             fit = fit_piecewise_logistic(
-                total_series=fit_series_source, breakpoints=breakpoints, events_df=st.session_state.get("events_df")
+                total_series=fit_series_source,
+                breakpoints=breakpoints,
+                events_df=st.session_state.get("events_df"),
+                extra_exog=extra_exog,
             )
             st.session_state["pwlog_fit"] = fit
 
-            # Persist sidebar defaults from fresh fit if no overrides exist yet
+            # ----- initialize sidebar override defaults if absent -----
             if "modelfit_K" not in st.session_state:
                 st.session_state["modelfit_K"] = float(getattr(fit, "carrying_capacity", 0.0))
             if "modelfit_gamma_pulse" not in st.session_state:
@@ -424,20 +447,35 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
             if "modelfit_r" not in st.session_state:
                 st.session_state["modelfit_r"] = list(getattr(fit, "segment_growth_rates", []) or [])
 
-            # Build overlay using current overrides to recompute fitted line
-            k_now, r_list_now, gp_now, gs_now, gx_now = _current_fit_params()
+            # ----- read current overrides & recompute fitted line with them -----
+            def _current_fit_params():
+                fit_obj = st.session_state.get("pwlog_fit")
+                k_val = float(st.session_state.get("modelfit_K", getattr(fit_obj, "carrying_capacity", 0.0) or 0.0))
+                r_list = list(
+                    st.session_state.get("modelfit_r", list(getattr(fit_obj, "segment_growth_rates", []) or []))
+                )
+                gp_val = float(
+                    st.session_state.get("modelfit_gamma_pulse", getattr(fit_obj, "gamma_pulse", 0.0) or 0.0)
+                )
+                gs_val = float(st.session_state.get("modelfit_gamma_step", getattr(fit_obj, "gamma_step", 0.0) or 0.0))
+                gx_val = st.session_state.get("modelfit_gamma_exog", getattr(fit_obj, "gamma_exog", None))
+                return k_val, r_list, gp_val, gs_val, gx_val
+
+            K_now, r_list_now, gp_now, gs_now, gx_now = _current_fit_params()
+
             fitted_from_overrides = fitted_series_from_params(
                 total_series=fit_series_source,
                 breakpoints=breakpoints,
-                carrying_capacity=float(k_now),
+                carrying_capacity=float(K_now),
                 segment_growth_rates=r_list_now,
                 events_df=st.session_state.get("events_df"),
-                extra_exog=None,
+                extra_exog=(extra_exog if gx_now is not None else None),
                 gamma_pulse=float(gp_now),
                 gamma_step=float(gs_now),
-                gamma_exog=float(gx_now) if gx_now is not None else None,
+                gamma_exog=(float(gx_now) if gx_now is not None else None),
             )
 
+            # ----- overlay chart: Actual vs Fitted (overrides) -----
             overlay_df = pd.DataFrame(
                 {"Actual": fit_series_source, "Fitted": fitted_from_overrides.reindex(fit_series_source.index)}
             )
@@ -462,15 +500,15 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
             )
             st.altair_chart(alt.layer(actual_line, fitted_line).properties(height=240), use_container_width=True)
 
+            # ----- metrics -----
             c1, c2, c3 = st.columns(3)
-            k_now, r_list_now, gp_now, gs_now, gx_now = _current_fit_params()
-            c1.metric("K (capacity)", f"{int(k_now):,}")
+            c1.metric("K (capacity)", f"{int(K_now):,}")
             c2.metric("Segments (r)", ", ".join(f"{r:0.3f}" for r in r_list_now))
             c3.metric("R² on ΔS", f"{fit.r2_on_deltas:0.3f}")
             if getattr(fit, "gamma_exog", None) is not None:
-                st.caption(f"Exogenous effect (log ad): γ_exog={float(gx_now):0.4f}")
+                st.caption(f"Exogenous effect: γ_exog={float(gx_now):0.4f}")
 
-            # Build and persist the growth equation for later display (e.g., in Simulator tab)
+            # ----- latex equation & stash for simulator tab -----
             eq = (
                 r"\Delta S_t = r_{seg(t)}\, S_{t-1} \left(1 - \frac{S_{t-1}}{K}\right) "
                 r"+ \gamma_{pulse}\,pulse_t + \gamma_{step}\,step_t"
@@ -478,11 +516,10 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
             if getattr(fit, "gamma_exog", None) is not None:
                 eq += r" + \gamma_{exog}\,x_t"
             st.session_state["growth_equation_latex"] = eq
-
             with st.expander("Model equation and parameters", expanded=False):
                 st.latex(eq)
                 st.markdown("**Fitted parameters**")
-                st.markdown(f"- **K (capacity)**: {float(k_now):,.0f}")
+                st.markdown(f"- **K (capacity)**: {float(K_now):,.0f}")
                 st.markdown(
                     "- **Segment growth rates r_j**: " + ", ".join(f"r{j+1}={r:0.3f}" for j, r in enumerate(r_list_now))
                 )
@@ -491,20 +528,21 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
                 if gx_now is not None:
                     st.markdown(f"- **γ_exog**: {float(gx_now):0.4f}")
 
+            # ----- optional forecast ahead -----
             if horizon_ahead > 0:
-                # Use current parameters (respecting overrides) for forecast
-                k_now, r_list_now, gp_now, gs_now, _gx_now = _current_fit_params()
-                last_val = float(fit.fitted_series.iloc[-1])
+                last_val = float(fitted_from_overrides.iloc[-1])
                 last_r = float(r_list_now[-1]) if r_list_now else 0.0
                 fc = forecast_piecewise_logistic(
                     last_value=last_val,
                     months_ahead=horizon_ahead,
-                    carrying_capacity=float(k_now),
+                    carrying_capacity=float(K_now),
                     segment_growth_rate=float(last_r),
                     gamma_step_level=float(gs_now),
                 )
                 fc_index = pd.date_range(
-                    fit.fitted_series.index[-1] + pd.offsets.MonthEnd(1), periods=horizon_ahead, freq="M"
+                    fitted_from_overrides.index[-1] + pd.offsets.MonthEnd(1),
+                    periods=horizon_ahead,
+                    freq="M",
                 )
                 fc_df = pd.DataFrame({"Forecast": fc}, index=fc_index)
                 merged = pd.concat([overlay_df, fc_df], axis=0)
@@ -529,6 +567,7 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
                     .properties(height=240)
                 )
                 st.altair_chart(chart_fc, use_container_width=True)
+
         except Exception as e:
             st.error(f"Model fit failed: {e}")
 
