@@ -166,6 +166,55 @@ def compute_estimates(
 
 
 def build_events_features(plot_df: pd.DataFrame, lam: float, theta: float, ad_file):
+    """Build monthly covariates/features from Events and optional ad spend.
+
+    This function encodes the app's Events table into time-aligned monthly
+    features and optionally derives advertising-related covariates from an
+    uploaded ad spend file. All outputs are aligned to the monthly index of
+    `plot_df` (month-end timestamps).
+
+    Parameters
+    ----------
+    plot_df : pd.DataFrame
+        DataFrame whose index defines the monthly timeline. Only the index is
+        used here; columns such as "Total" are not required.
+    lam : float
+        Adstock carryover parameter in [0, 1). Higher values yield longer
+        persistence of past ad spend in the `adstock` feature.
+    theta : float
+        Scale parameter for the log transform used in `ad_effect_log`.
+        The feature is computed as log(1 + adstock/theta).
+    ad_file : file-like or None
+        Optional CSV/XLSX with columns {"date", "spend"}. Values are grouped to
+        month end and aligned to the index as the `ad_spend` covariate.
+
+    Reads
+    -----
+    st.session_state["events_df"] : pd.DataFrame (optional)
+        Expected columns: "date" (any parseable date), "type" (e.g., "Ad spend",
+        "Launch"), optional "persistence" ("Transient" or "Persistent"), and
+        optional "cost" (used as a weight for ad-type pulses). Dates are
+        normalised to month end.
+
+    Returns
+    -------
+    covariates_df : pd.DataFrame
+        Contains a single column `ad_spend` (monthly), zero if no ad file.
+    features_df : pd.DataFrame
+        Columns:
+          - `pulse`: transient spikes at event months; for ad-like events the
+            magnitude defaults to `cost` (or 1.0 if missing).
+          - `step`: persistent unit-step from event month onward.
+          - `adstock`: recursive carryover of `ad_spend` using `lam`.
+          - `ad_effect_log`: log(1 + adstock/theta).
+
+    Notes
+    -----
+    - Event dates falling outside the monthly index are ignored.
+    - If an event's persistence is unspecified, it contributes to both `pulse`
+      and `step` for backward compatibility.
+    - All outputs are float-valued and aligned to the month-end index.
+    """
     monthly_index = plot_df.index
     pulse = pd.Series(0.0, index=monthly_index, name="pulse")
     step = pd.Series(0.0, index=monthly_index, name="step")
