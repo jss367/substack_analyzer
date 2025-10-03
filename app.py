@@ -1003,13 +1003,24 @@ def render_estimators() -> None:
             ev2 = ev.dropna(subset=["date"]) if not ev.empty else ev
             if ev2 is not None and not ev2.empty:
                 ev2 = ev2.copy()
-                ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+                # Coerce invalid dates to NaT then drop them
+                ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce").dt.to_period("M").dt.to_timestamp("M")
+                ev2 = ev2.dropna(subset=["date"])  # keep only rows with valid dates
                 rows = []
                 for _, r in ev2.iterrows():
                     d = r["date"]
-                    pre, post = slope_around(total_series, d, window=6)
-                    delta = post - pre
-                    cost = float(r.get("cost", 0.0) or 0.0)
+                    # Skip rows where analysis cannot be computed
+                    try:
+                        pre, post = slope_around(total_series, d, window=6)
+                        delta = post - pre
+                    except Exception:
+                        continue
+
+                    # Safely coerce cost to a numeric value, defaulting to 0.0 on NaN/NaT/invalid
+                    raw_cost = r.get("cost", 0.0)
+                    cost_num = pd.to_numeric(raw_cost, errors="coerce")
+                    cost = 0.0 if pd.isna(cost_num) else float(cost_num)
+
                     rows.append({"date": d, "type": r.get("type", ""), "slope_delta": delta, "cost": cost})
                 if rows:
                     out = pd.DataFrame(rows)
