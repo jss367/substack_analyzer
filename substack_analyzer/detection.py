@@ -90,24 +90,23 @@ def detect_change_points(
 
     Parameters
     ----------
-    series : pd.Series
+    series
         Time-indexed series (dates as index).
-    paid : Optional[pd.Series]
+    paid
         Currently unused; kept for future multi-series extension.
-    max_changes : int
+    max_changes
         Maximum number of change points to return.
-    min_seg_len : int
+    min_seg_len
         Minimum segment length in delta-space (requires this many deltas per segment).
-    penalty_scale : float
+    penalty_scale
         Multiplier on sigma^2 * log(n_delta) as the acceptance penalty for adding a split.
         Larger -> fewer breaks.
-    return_timestamps : bool
+    return_timestamps
         If True, return change points as pd.Timestamp values instead of integer indices.
 
     Returns
     -------
-    list[int] | list[pd.Timestamp]
-        Breakpoint positions (indices into the original series or corresponding timestamps).
+    Breakpoint positions (indices into the original series or corresponding timestamps).
     """
     s = series.dropna().sort_index()
     n = len(s)

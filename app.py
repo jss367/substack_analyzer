@@ -1114,36 +1114,211 @@ def _compute_estimates(
     return compute_estimates(all_series, paid_series, window_months)
 
 
+from dataclasses import dataclass
+
+
+@dataclass
+class ImportContext:
+    all_series: Optional[pd.Series]
+    paid_series: Optional[pd.Series]
+    plot_df: pd.DataFrame
+    net_only: bool
+    debug_mode: bool
+
+
+def _to_monthly_last(s: Optional[pd.Series]) -> Optional[pd.Series]:
+    if s is None or s.empty:
+        return s
+    s2 = pd.to_datetime(pd.Index(s.index), errors="coerce")
+    s = pd.Series(pd.to_numeric(s.values, errors="coerce"), index=s2).dropna()
+    return s.resample("M").last()
+
+
+def _build_plot_df(all_series: Optional[pd.Series], paid_series: Optional[pd.Series]) -> pd.DataFrame:
+    plot_df = pd.DataFrame()
+    if all_series is not None and not all_series.empty:
+        plot_df["Total"] = all_series
+    if paid_series is not None and not paid_series.empty:
+        plot_df["Paid"] = paid_series
+    if {"Total", "Paid"}.issubset(plot_df.columns):
+        plot_df["Free"] = pd.to_numeric(plot_df["Total"], errors="coerce") - pd.to_numeric(
+            plot_df["Paid"], errors="coerce"
+        )
+    return plot_df
+
+
+def _safe_select_columns(head: pd.DataFrame, key_prefix: str) -> tuple[Optional[int], Optional[int]]:
+    ncols = head.shape[1]
+    if ncols < 2:
+        st.error(f"{key_prefix.capitalize()} file needs at least 2 columns (date, count).")
+        return None, None
+    date_sel = st.selectbox(
+        f"{key_prefix.capitalize()}: date column (index)",
+        list(range(ncols)),
+        index=0,
+        key=f"{key_prefix}_date_sel",
+    )
+    count_sel = st.selectbox(
+        f"{key_prefix.capitalize()}: count column (index)",
+        list(range(ncols)),
+        index=min(1, ncols - 1),
+        key=f"{key_prefix}_count_sel",
+    )
+    return date_sel, count_sel
+
+
+def _ui_upload_two_files() -> (
+    tuple[Optional[Any], bool, Optional[int], Optional[int], Optional[Any], bool, Optional[int], Optional[int]]
+):
+    c_all, c_paid = st.columns(2)
+    with c_all:
+        all_file, all_has_header, _, _ = upload_panel(
+            "All subscribers file (CSV/XLSX, often downloaded as `[blogname]_emails_[date].csv`)",
+            help_hint="Pick the time series of all subscribers over time.",
+            key_prefix="all",
+            default_header=False,
+        )
+        if all_file is not None:
+            try:
+                head = read_head_preview(all_file, all_has_header, nrows=5)
+                all_date_sel, all_count_sel = _safe_select_columns(head, "all")
+            except Exception as e:
+                st.error(f"Could not read All file: {e}")
+                all_file, all_date_sel, all_count_sel = None, None, None
+        else:
+            all_date_sel, all_count_sel = None, None
+
+    with c_paid:
+        paid_file, paid_has_header, _, _ = upload_panel(
+            "Paid subscribers file (CSV/XLSX, often downloaded as `[blogname]_subscribers_[date].csv`)",
+            help_hint="Pick the time series of paid subscribers over time.",
+            key_prefix="paid",
+            default_header=False,
+        )
+        if paid_file is not None:
+            try:
+                head = read_head_preview(paid_file, paid_has_header, nrows=5)
+                paid_date_sel, paid_count_sel = _safe_select_columns(head, "paid")
+            except Exception as e:
+                st.error(f"Could not read Paid file: {e}")
+                paid_file, paid_date_sel, paid_count_sel = None, None, None
+        else:
+            paid_date_sel, paid_count_sel = None, None
+
+    return (
+        all_file,
+        all_has_header,
+        all_date_sel,
+        all_count_sel,
+        paid_file,
+        paid_has_header,
+        paid_date_sel,
+        paid_count_sel,
+    )
+
+
+def _parse_and_normalize_series(
+    all_file,
+    all_has_header,
+    all_date_sel,
+    all_count_sel,
+    paid_file,
+    paid_has_header,
+    paid_date_sel,
+    paid_count_sel,
+    debug_mode: bool,
+) -> ImportContext:
+    all_series = (
+        read_series(all_file, all_has_header, all_date_sel, all_count_sel)
+        if all_file is not None and all_date_sel is not None and all_count_sel is not None
+        else None
+    )
+    paid_series = (
+        read_series(paid_file, paid_has_header, paid_date_sel, paid_count_sel)
+        if paid_file is not None and paid_date_sel is not None and paid_count_sel is not None
+        else None
+    )
+
+    # Normalize to monthly once
+    all_series_m = _to_monthly_last(all_series)
+    paid_series_m = _to_monthly_last(paid_series)
+
+    plot_df = _build_plot_df(all_series_m, paid_series_m)
+
+    if debug_mode:
+        st.caption(
+            f"Debug: all={None if all_series_m is None else len(all_series_m)}; "
+            f"paid={None if paid_series_m is None else len(paid_series_m)}; "
+            f"cols={list(plot_df.columns)}"
+        )
+
+    # Persist minimal state for other tabs
+    if all_series_m is not None:
+        st.session_state["import_total"] = all_series_m
+    if paid_series_m is not None:
+        st.session_state["import_paid"] = paid_series_m
+
+    net_only = st.checkbox("Use net-only growth (set churn to 0)", value=True)
+    return ImportContext(all_series_m, paid_series_m, plot_df, net_only, debug_mode)
+
+
+def _stage1_observations(plot_df: pd.DataFrame) -> None:
+    if plot_df.empty:
+        return
+    emit_observations(plot_df)
+
+
+def _ui_series_chart(plot_df: pd.DataFrame) -> tuple[bool, bool]:
+    if plot_df.empty:
+        return False, False
+    use_dual_axis = st.checkbox(
+        "Use separate right axis for Paid",
+        value=True,
+        help="Plots Total/Free on left axis and Paid on right axis for readability.",
+    )
+    show_total = st.checkbox("Show Total line", value=("Paid" not in plot_df.columns))
+    series_title = "Series (Paid is dashed)" if (use_dual_axis and "Paid" in plot_df.columns) else "Series"
+    chart = plot_series(plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title)
+    st.altair_chart(chart, use_container_width=True)
+    return use_dual_axis, show_total
+
+
+def _stage2_events_and_detection(plot_df: pd.DataFrame) -> tuple[list[int], Optional[str]]:
+    events_editor()
+    target_col = "Total" if "Total" in plot_df.columns else ("Free" if "Free" in plot_df.columns else None)
+    bkps = trend_detection_ui(plot_df, target_col)
+    return bkps, target_col
+
+
+def _stage2_features(plot_df: pd.DataFrame) -> None:
+    events_features_ui(plot_df)
+
+
+def _stage3_adds_churn(plot_df: pd.DataFrame) -> None:
+    adds_and_churn_ui(plot_df)
+
+
+def _stage4_fit_and_overlay(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
+    quick_fit_ui(plot_df, breakpoints)
+
+
+def _stage5_tail(
+    plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, target_col: Optional[str], breakpoints: list[int]
+) -> None:
+    tail_view_ui(plot_df, use_dual_axis, show_total, target_col, breakpoints)
+
+
 def render_data_import() -> None:
     """
     Stage 1–5: Import, preview, annotate, feature-build, quick-fit, diagnostics, and handoff.
-
-    Notes:
-    - Uses st.session_state keys:
-      import_total, import_paid, observations_df, events_df, covariates_df, features_df,
-      adds_df, churn_df, pwlog_fit, switch_to_sim, est_window, horizon_months, ...
     """
-
-    # ---------- Small internal utilities ----------
-
-    def _upload_panel(
-        title: str,
-        help_hint: str,
-        key_prefix: str,
-        default_header: bool = False,
-    ) -> tuple[Optional[Any], bool, Optional[int], Optional[int]]:
-        return upload_panel(title, help_hint, key_prefix, default_header)
-
-    def _plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, series_title: str) -> alt.Chart:
-        return plot_series(plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title)
-
-    # ---------- UI: Header + quick save/load ----------
     st.subheader("Stage 1: Import Substack exports (time series)")
     st.caption(
-        "Upload two files: All subscribers over time, and Paid subscribers over time."
-        " No headers by default: first column is date, second is count."
+        "Upload two files: All subscribers over time, and Paid subscribers over time. "
+        "We normalize everything to end-of-month (monthly). No headers by default: first column is date, second is count."
     )
 
+    # Quick save/load
     with st.expander("Save / Load (quick access)", expanded=False):
         has_fit_i = st.session_state.get("pwlog_fit") is not None
         include_fit_i = st.checkbox("Include model fit", value=bool(has_fit_i), key="import_include_fit")
@@ -1166,109 +1341,68 @@ def render_data_import() -> None:
             except Exception as e:
                 st.error(f"Failed to load bundle: {e}")
 
-    # ---------- Upload inputs (All / Paid) ----------
-    c_all, c_paid = st.columns(2)
-    with c_all:
-        all_file, all_has_header, all_date_sel, all_count_sel = _upload_panel(
-            "All subscribers file (CSV/XLSX, often downloaded as `[blogname]_emails_[date].csv`)",
-            help_hint="Pick the time series of all subscribers over time.",
-            key_prefix="all",
-            default_header=False,
+    # Uploads
+    (
+        all_file,
+        all_has_header,
+        all_date_sel,
+        all_count_sel,
+        paid_file,
+        paid_has_header,
+        paid_date_sel,
+        paid_count_sel,
+    ) = _ui_upload_two_files()
+
+    # Only proceed if at least one file present
+    if all_file is None and paid_file is None:
+        return
+
+    debug_mode = st.checkbox("Enable debug logging", value=True, help="Adds console logs and inline diagnostics.")
+
+    try:
+        ctx = _parse_and_normalize_series(
+            all_file,
+            all_has_header,
+            all_date_sel,
+            all_count_sel,
+            paid_file,
+            paid_has_header,
+            paid_date_sel,
+            paid_count_sel,
+            debug_mode,
         )
-    with c_paid:
-        paid_file, paid_has_header, paid_date_sel, paid_count_sel = _upload_panel(
-            "Paid subscribers file (CSV/XLSX, often downloaded as `[blogname]_subscribers_[date].csv`)",
-            help_hint="Pick the time series of paid subscribers over time.",
-            key_prefix="paid",
-            default_header=False,
-        )
 
-    # ---------- Main flow only if at least one file present ----------
-    if all_file is not None or paid_file is not None:
-        net_only = st.checkbox("Use net-only growth (set churn to 0)", value=True)
-        debug_mode = st.checkbox("Enable debug logging", value=True, help="Adds console logs and inline diagnostics.")
+        if ctx.plot_df.empty:
+            st.info("No usable data found after parsing/normalization.")
+            return
 
-        try:
-            all_series = (
-                read_series(all_file, all_has_header, all_date_sel, all_count_sel) if all_file is not None else None
-            )
-            paid_series = (
-                read_series(paid_file, paid_has_header, paid_date_sel, paid_count_sel)
-                if paid_file is not None
-                else None
-            )
+        st.subheader("Imported series")
+        st.caption("Mode: Paid and unpaid" if "Paid" in ctx.plot_df.columns else "Mode: Unpaid only")
 
-            plot_df = pd.DataFrame()
-            if all_series is not None and not all_series.empty:
-                plot_df["Total"] = all_series
-                st.session_state["import_total"] = all_series
-            if paid_series is not None and not paid_series.empty:
-                plot_df["Paid"] = paid_series
-                st.session_state["import_paid"] = paid_series
-            if debug_mode:
-                st.caption(
-                    f"Debug: all_series={'None' if all_series is None else len(all_series)}; "
-                    f"paid_series={'None' if paid_series is None else len(paid_series)}; "
-                    f"plot_df_cols={list(plot_df.columns)}"
-                )
+        # Stage 1: observations
+        _stage1_observations(ctx.plot_df)
 
-            if not plot_df.empty:
-                if "Total" in plot_df.columns and "Paid" in plot_df.columns:
-                    plot_df["Free"] = plot_df["Total"].astype(float) - plot_df["Paid"].astype(float)
+        # Chart
+        use_dual_axis, show_total = _ui_series_chart(ctx.plot_df)
 
-                st.subheader("Imported series")
-                st.caption("Mode: Paid and unpaid" if "Paid" in plot_df.columns else "Mode: Unpaid only")
+        # Stage 2: events + detection + features
+        breakpoints, target_col = _stage2_events_and_detection(ctx.plot_df)
+        _stage2_features(ctx.plot_df)
 
-                # Stage 1 output: observations_df
-                with suppress(Exception):
-                    emit_observations(plot_df)
+        # Stage 3: Adds & Churn
+        _stage3_adds_churn(ctx.plot_df)
 
-                # Chart controls
-                use_dual_axis = st.checkbox(
-                    "Use separate right axis for Paid",
-                    value=True,
-                    help="Plots Total/Free on left axis and Paid on right axis for readability.",
-                )
-                default_show_total = "Paid" not in plot_df.columns
-                show_total = st.checkbox("Show Total line", value=default_show_total)
+        # Stage 4: Fit
+        _stage4_fit_and_overlay(ctx.plot_df, breakpoints)
 
-                series_title = (
-                    "Series (Paid is dashed)" if (use_dual_axis and ("Paid" in plot_df.columns)) else "Series"
-                )
-                chart = _plot_series(
-                    plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title
-                )
-                st.altair_chart(chart, use_container_width=True)
+        # Stage 5: Diagnostics tail
+        _stage5_tail(ctx.plot_df, use_dual_axis, show_total, target_col, breakpoints)
 
-                # Stage 2: Events editor (moved below the graph per request)
-                events_editor()
+        # Summary metrics + apply to simulator
+        metrics_and_apply_ui(ctx.all_series, ctx.paid_series, net_only=ctx.net_only)
 
-                # Trend detection on Total if present else Free
-                target_col = "Total" if "Total" in plot_df.columns else ("Free" if "Free" in plot_df.columns else None)
-                breakpoints = trend_detection_ui(plot_df, target_col)
-
-                events_features_ui(plot_df)
-
-                # Stage 3: Adds & Churn
-                adds_and_churn_ui(plot_df)
-
-                # Stage 4: Quick Fit
-                quick_fit_ui(plot_df, breakpoints)
-
-                # Stage 5: Diagnostics + Tail view
-                tail_view_ui(
-                    plot_df,
-                    use_dual_axis=use_dual_axis,
-                    show_total=show_total,
-                    target_col=target_col,
-                    breakpoints=breakpoints,
-                )
-
-            # Summary metrics + apply to simulator
-            metrics_and_apply_ui(all_series, paid_series, net_only=net_only)
-
-        except Exception as e:
-            st.error(f"Estimation failed: {e}")
+    except Exception as e:
+        st.error(f"Estimation failed: {e}")
 
 
 render_brand_header()
