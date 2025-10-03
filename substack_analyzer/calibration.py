@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Optional, Sequence
 
 import numpy as np
 import pandas as pd
@@ -10,8 +10,8 @@ import pandas as pd
 @dataclass(frozen=True)
 class PiecewiseLogisticFit:
     carrying_capacity: float
-    segment_growth_rates: List[float]
-    breakpoints: List[int]
+    segment_growth_rates: list[float]
+    breakpoints: list[int]
     gamma_pulse: float
     gamma_step: float
     fitted_series: pd.Series
@@ -31,10 +31,10 @@ def _ensure_month_end_index(series: pd.Series) -> pd.Series:
     return s
 
 
-def _segments_from_breakpoints(n: int, breakpoints: Sequence[int]) -> List[Tuple[int, int]]:
+def _segments_from_breakpoints(n: int, breakpoints: Sequence[int]) -> list[tuple[int, int]]:
     if not breakpoints:
         return [(0, n - 1)]
-    segments: List[Tuple[int, int]] = []
+    segments: list[tuple[int, int]] = []
     start = 0
     for bp in breakpoints:
         end = max(min(bp - 1, n - 2), start)  # end applies to delta index; safe bound
@@ -46,7 +46,7 @@ def _segments_from_breakpoints(n: int, breakpoints: Sequence[int]) -> List[Tuple
     return segments
 
 
-def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]) -> Tuple[np.ndarray, np.ndarray]:
+def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]) -> tuple[np.ndarray, np.ndarray]:
     if events_df is None or events_df.empty:
         return np.zeros(len(index)), np.zeros(len(index))
     df = events_df.dropna(subset=["date"]).copy()
@@ -83,7 +83,7 @@ def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]
 
 def fit_piecewise_logistic(
     total_series: pd.Series,
-    breakpoints: Optional[List[int]] = None,
+    breakpoints: Optional[list[int]] = None,
     events_df: Optional[pd.DataFrame] = None,
     k_grid: Optional[Sequence[float]] = None,
     extra_exog: Optional[pd.Series] = None,
@@ -136,7 +136,7 @@ def fit_piecewise_logistic(
     for K in k_grid:
         X_base = (s_lag * (1.0 - s_lag / K)).to_numpy().astype(float)
         # Design matrix: one column per segment (X_base masked), plus pulse, step, optional exog
-        X_cols: List[np.ndarray] = []
+        X_cols: list[np.ndarray] = []
         for start, end in seg_bounds:
             mask = np.zeros(n, dtype=float)
             mask[start : end + 1] = 1.0
@@ -235,7 +235,7 @@ def forecast_piecewise_logistic(
 
 def fitted_series_from_params(
     total_series: pd.Series,
-    breakpoints: Optional[List[int]],
+    breakpoints: Optional[list[int]],
     carrying_capacity: float,
     segment_growth_rates: Sequence[float],
     events_df: Optional[pd.DataFrame] = None,
