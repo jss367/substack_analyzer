@@ -109,12 +109,7 @@ def _events_change_dates() -> list[pd.Timestamp]:
 
 def _set_markers_from_events() -> None:
     """Make the chart markers come from events (and keep them there)."""
-    if "markers_source" not in st.session_state:
-        st.session_state["markers_source"] = (
-            "events"
-            if isinstance(st.session_state.get("events_df"), pd.DataFrame) and not st.session_state["events_df"].empty
-            else "detect"
-        )
+    st.session_state["markers_source"] = "events"
     st.session_state["detected_change_dates"] = _events_change_dates()
 
 
