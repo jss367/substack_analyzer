@@ -28,7 +28,7 @@ def render_brand_header(logo_full: Path, logo_icon: Path) -> None:
     c1, c2 = st.columns([1, 5])
     with c1:
         if logo_full.exists():
-            st.image(str(logo_full), use_container_width=True)
+            st.image(str(logo_full), width="stretch")
         elif logo_icon.exists():
             st.image(str(logo_icon), width=96)
     with c2:

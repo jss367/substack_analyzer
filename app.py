@@ -143,7 +143,7 @@ def _apply_pending_state_updates() -> None:
 _inject_brand_styles()
 _apply_pending_state_updates()
 if LOGO_FULL.exists() or LOGO_ICON.exists():
-    st.sidebar.image(str(LOGO_FULL if LOGO_FULL.exists() else LOGO_ICON), use_container_width=True)
+    st.sidebar.image(str(LOGO_FULL if LOGO_FULL.exists() else LOGO_ICON), width="stretch")
 
 
 def _format_date_badges(dates: list[pd.Timestamp | str]) -> str:
@@ -223,7 +223,7 @@ def emit_observations(plot_df: pd.DataFrame) -> None:
     obs.index.name = "date"
     st.session_state["observations_df"] = obs
     with st.expander("Stage 1 output: observations_df", expanded=False):
-        st.dataframe(obs.reset_index(), use_container_width=True)
+        st.dataframe(obs.reset_index(), width="stretch")
         st.download_button(
             "Download observations.csv",
             data=obs.reset_index().to_csv(index=False).encode("utf-8"),
@@ -310,7 +310,7 @@ def events_editor() -> None:
                 "Cost ($)", step=10.0, min_value=0.0, format="%.2f", help="For Ad spend ROI calc"
             ),
         },
-        use_container_width=True,
+        width="stretch",
         key="events_editor",
         on_change=_on_events_editor_change,  # <-- commit only on edit
     )
@@ -374,7 +374,7 @@ def events_features_ui(plot_df: pd.DataFrame) -> None:
         st.session_state["covariates_df"] = covariates_df
         st.session_state["features_df"] = features_df
         st.markdown("**Outputs**: `events_df` (above), `covariates_df`, `features_df`.")
-        st.dataframe(features_df.reset_index(), use_container_width=True)
+        st.dataframe(features_df.reset_index(), width="stretch")
         # download buttons unchanged...
 
 
@@ -407,8 +407,8 @@ def adds_and_churn_ui(plot_df: pd.DataFrame) -> None:
             st.session_state["adds_df"] = adds_df
             st.session_state["churn_df"] = churn_df
             st.markdown("**Outputs**: `adds_df`, `churn_df` (monthly, heuristics).")
-            st.dataframe(adds_df.reset_index(), use_container_width=True)
-            st.dataframe(churn_df.reset_index(), use_container_width=True)
+            st.dataframe(adds_df.reset_index(), width="stretch")
+            st.dataframe(churn_df.reset_index(), width="stretch")
             b1, b2 = st.columns(2)
             with b1:
                 st.download_button(
@@ -521,7 +521,7 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
                 .mark_line(strokeDash=[5, 3])
                 .encode(y="Value:Q", color=alt.Color("Series:N", scale=alt.Scale(range=["#ff7f0e"])))
             )
-            st.altair_chart(alt.layer(actual_line, fitted_line).properties(height=240), use_container_width=True)
+            st.altair_chart(alt.layer(actual_line, fitted_line).properties(height=240), width="stretch")
 
             # ----- metrics -----
             c1, c2, c3 = st.columns(3)
@@ -580,7 +580,7 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
                     )
                     .properties(height=240)
                 )
-                st.altair_chart(chart_fc, use_container_width=True)
+                st.altair_chart(chart_fc, width="stretch")
 
         except Exception as e:
             st.error(f"Model fit failed: {e}")
@@ -651,7 +651,7 @@ def tail_view_ui(
         except Exception:
             pass
 
-    st.altair_chart(base_chart, use_container_width=True)
+    st.altair_chart(base_chart, width="stretch")
 
 
 def metrics_and_apply_ui(all_series, paid_series, net_only: bool) -> None:
@@ -1143,7 +1143,7 @@ def render_estimators() -> None:
                     rows.append({"date": d, "type": r.get("type", ""), "slope_delta": delta, "cost": cost})
                 if rows:
                     out = pd.DataFrame(rows)
-                    st.dataframe(out, use_container_width=True)
+                    st.dataframe(out, width="stretch")
 
     with st.expander("Acquisition cost (CAC)", expanded=True):
         spend = st.number_input("Ad spend in period", min_value=0.0, value=3000.0, step=50.0)
@@ -1399,7 +1399,7 @@ def _ui_series_chart(plot_df: pd.DataFrame) -> tuple[bool, bool]:
     base = plot_series(plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title)
     rules = _event_rules_from_events() if st.session_state.get("markers_source", "detect") == "events" else None
     chart = alt.layer(base, rules) if rules is not None else base
-    st.altair_chart(chart, use_container_width=True)
+    st.altair_chart(chart, width="stretch")
     return use_dual_axis, show_total
 
 
