@@ -1,5 +1,6 @@
 import math
 from contextlib import suppress
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -1249,16 +1250,12 @@ def _compute_estimates(
     return compute_estimates(all_series, paid_series, window_months)
 
 
-from dataclasses import dataclass
-
-
 @dataclass
 class ImportContext:
     all_series: Optional[pd.Series]
     paid_series: Optional[pd.Series]
     plot_df: pd.DataFrame
     net_only: bool
-    debug_mode: bool
 
 
 def _to_monthly_last(s: Optional[pd.Series]) -> Optional[pd.Series]:
@@ -1361,7 +1358,6 @@ def _parse_and_normalize_series(
     paid_has_header,
     paid_date_sel,
     paid_count_sel,
-    debug_mode: bool,
 ) -> ImportContext:
     all_series = (
         read_series(all_file, all_has_header, all_date_sel, all_count_sel)
@@ -1380,13 +1376,6 @@ def _parse_and_normalize_series(
 
     plot_df = _build_plot_df(all_series_m, paid_series_m)
 
-    if debug_mode:
-        st.caption(
-            f"Debug: all={None if all_series_m is None else len(all_series_m)}; "
-            f"paid={None if paid_series_m is None else len(paid_series_m)}; "
-            f"cols={list(plot_df.columns)}"
-        )
-
     # Persist minimal state for other tabs
     if all_series_m is not None:
         st.session_state["import_total"] = all_series_m
@@ -1394,13 +1383,7 @@ def _parse_and_normalize_series(
         st.session_state["import_paid"] = paid_series_m
 
     net_only = st.checkbox("Use net-only growth (set churn to 0)", value=True)
-    return ImportContext(all_series_m, paid_series_m, plot_df, net_only, debug_mode)
-
-
-def _stage1_observations(plot_df: pd.DataFrame) -> None:
-    if plot_df.empty:
-        return
-    emit_observations(plot_df)
+    return ImportContext(all_series_m, paid_series_m, plot_df, net_only)
 
 
 def _ui_series_chart(plot_df: pd.DataFrame) -> tuple[bool, bool]:
@@ -1425,18 +1408,6 @@ def _stage2_events_and_detection(plot_df: pd.DataFrame) -> tuple[list[int], Opti
     target_col = "Total" if "Total" in plot_df.columns else ("Free" if "Free" in plot_df.columns else None)
     bkps = trend_detection_ui(plot_df, target_col)
     return bkps, target_col
-
-
-def _stage2_features(plot_df: pd.DataFrame) -> None:
-    events_features_ui(plot_df)
-
-
-def _stage3_adds_churn(plot_df: pd.DataFrame) -> None:
-    adds_and_churn_ui(plot_df)
-
-
-def _stage4_fit_and_overlay(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
-    quick_fit_ui(plot_df, breakpoints)
 
 
 def _stage5_tail(
@@ -1494,8 +1465,6 @@ def render_data_import() -> None:
     if all_file is None and paid_file is None:
         return
 
-    debug_mode = st.checkbox("Enable debug logging", value=True, help="Adds console logs and inline diagnostics.")
-
     try:
         ctx = _parse_and_normalize_series(
             all_file,
@@ -1506,7 +1475,6 @@ def render_data_import() -> None:
             paid_has_header,
             paid_date_sel,
             paid_count_sel,
-            debug_mode,
         )
 
         if ctx.plot_df.empty:
@@ -1517,20 +1485,24 @@ def render_data_import() -> None:
         st.caption("Mode: Paid and unpaid" if "Paid" in ctx.plot_df.columns else "Mode: Unpaid only")
 
         # Stage 1: observations
-        _stage1_observations(ctx.plot_df)
+        if not ctx.plot_df.empty:
+            emit_observations(ctx.plot_df)
 
         # Chart
         use_dual_axis, show_total = _ui_series_chart(ctx.plot_df)
 
         # Stage 2: events + detection + features
         breakpoints, target_col = _stage2_events_and_detection(ctx.plot_df)
-        _stage2_features(ctx.plot_df)
+        events_features_ui(ctx.plot_df)
 
         # Stage 3: Adds & Churn
-        _stage3_adds_churn(ctx.plot_df)
+        adds_and_churn_ui(ctx.plot_df)
 
         # Stage 4: Fit
-        _stage4_fit_and_overlay(ctx.plot_df, breakpoints)
+        with st.expander("Stage 4 inputs (data & breakpoints)", expanded=False):
+            st.write("Breakpoints:", breakpoints)
+            st.dataframe(ctx.plot_df, width="stretch")
+        quick_fit_ui(ctx.plot_df, breakpoints)
 
         # Stage 5: Diagnostics tail
         _stage5_tail(ctx.plot_df, use_dual_axis, show_total, target_col, breakpoints)

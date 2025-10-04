@@ -19,19 +19,42 @@ from substack_analyzer.persistence import apply_session_bundle, collect_session_
 from substack_analyzer.types import AdSpendSchedule, SimulationInputs
 
 
-def _make_synthetic_series(n_months: int = 48, seed: int = 7) -> pd.Series:
+def _make_synthetic_series(
+    n_rate_changes: int = 1,
+    n_months: int = 48,
+    start_value: float = 200,
+    K: float = 15000,
+    seed: int = 7,
+    rates: list[float] | None = None,
+) -> pd.Series:
+    """
+    Generate a synthetic logistic-like time series with optional multiple growth rate changes.
+
+    K is the carrying capacity.
+    """
     rng = np.random.default_rng(seed)
     idx = pd.period_range("2022-01", periods=n_months, freq="M").to_timestamp("M")
+
+    # Determine growth rates for each segment
+    n_segments = n_rate_changes + 1
+    if rates is None:
+        rates = np.linspace(0.05, 0.25, n_segments)
+    elif len(rates) != n_segments:
+        raise ValueError(f"Expected {n_segments} growth rates, got {len(rates)}")
+
+    # Boundaries for rate changes
+    segment_bounds = np.linspace(0, n_months, n_segments + 1, dtype=int)
+
     values: list[float] = []
-    s = 200.0
-    for t in range(n_months):
-        r = 0.12 if t < (n_months // 2) else 0.05
-        K = 15000.0
-        delta = r * s * (1.0 - s / K) + rng.normal(0.0, 15.0)
-        s = max(s + delta, 0.0)
-        values.append(s)
-    s_total = pd.Series(values, index=idx, name="Total")
-    return s_total.round().astype(int)
+
+    for seg in range(n_segments):
+        r = rates[seg]
+        for t in range(segment_bounds[seg], segment_bounds[seg + 1]):
+            delta = r * start_value * (1.0 - start_value / K) + rng.normal(0.0, 15.0)
+            s = max(start_value + delta, 0.0)
+            values.append(s)
+
+    return pd.Series(values, index=idx, name="Total").round().astype(int)
 
 
 def _make_paid_from_total(total: pd.Series, frac: float = 0.08, seed: int = 42) -> pd.Series:
@@ -46,7 +69,7 @@ def _make_paid_from_total(total: pd.Series, frac: float = 0.08, seed: int = 42) 
 
 def test_e2e_walkthrough_headless():
     # Synthetic data
-    total = _make_synthetic_series()
+    total = _make_synthetic_series(0)
     paid = _make_paid_from_total(total)
 
     # Seed session state needed by feature builders

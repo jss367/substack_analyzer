@@ -125,7 +125,7 @@ def fit_piecewise_logistic(
         except Exception:
             exog = None
 
-    # K grid
+    # K grid to do grid search for carrying capacity
     max_s = float(s.max())
     if k_grid is None:
         k_grid = np.linspace(max_s * 1.1, max_s * 5.0, num=25)
