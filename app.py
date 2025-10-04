@@ -30,6 +30,12 @@ ASSETS_DIR = Path(__file__).parent / "logos"
 LOGO_ICON = ASSETS_DIR / "ROPI_IconDark Green_RGB.png"
 LOGO_FULL = ASSETS_DIR / "RPI_Full logo_Dark Green_RGB.png"
 
+# MUST be the first Streamlit call:
+st.set_page_config(
+    page_title="Substack Ads ROI Simulator",
+    layout="wide",
+    page_icon=str(LOGO_ICON) if LOGO_ICON.exists() else (str(LOGO_FULL) if LOGO_FULL.exists() else None),
+)
 
 # --- Events table: single source of truth ---
 EVENTS_COLUMNS = ["date", "type", "persistence", "notes", "cost"]
@@ -63,24 +69,53 @@ def _clean_events_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _event_rules_from_events() -> Optional[alt.Chart]:
+    ev = st.session_state.get("events_df")
+    if not isinstance(ev, pd.DataFrame) or ev.empty or "date" not in ev.columns:
+        return None
+    ev2 = ev.copy()
+    ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce")
+    ev2 = ev2.dropna(subset=["date"])
+    # If you want month-end snapping instead, derive a date_m column here.
+    return (
+        alt.Chart(ev2)
+        .mark_rule(strokeWidth=2, color="#8e44ad")
+        .encode(x=alt.X("date:T", title="Date"), tooltip=["date:T", "type", "persistence", "notes", "cost"])
+    )
+
+
 def _on_events_editor_change():
-    """Commit grid edits -> session_state['events_df'] safely."""
     grid_df = st.session_state.get("events_editor")
     try:
         if isinstance(grid_df, pd.DataFrame):
             st.session_state["events_df"] = _clean_events_df(grid_df)
         else:
             st.session_state["events_df"] = _clean_events_df(pd.DataFrame(grid_df))
+        _set_markers_from_events()
     except Exception:
-        # If something odd comes back from the widget, keep the previous value.
         pass
 
 
-st.set_page_config(
-    page_title="Substack Ads ROI Simulator",
-    layout="wide",
-    page_icon=str(LOGO_ICON) if LOGO_ICON.exists() else (str(LOGO_FULL) if LOGO_FULL.exists() else None),
-)
+def _events_change_dates() -> list[pd.Timestamp]:
+    ev = st.session_state.get("events_df")
+    if not isinstance(ev, pd.DataFrame) or ev.empty or "date" not in ev.columns:
+        return []
+    ev2 = ev.copy()
+    ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce")
+    # Use only "Change" rows for change-point markers; tweak if you want all events
+    mask = ev2.get("type").astype(str).str.lower().eq("change")
+    return [pd.Timestamp(d) for d in ev2.loc[mask, "date"].dropna().tolist()]
+
+
+def _set_markers_from_events() -> None:
+    """Make the chart markers come from events (and keep them there)."""
+    if "markers_source" not in st.session_state:
+        st.session_state["markers_source"] = (
+            "events"
+            if isinstance(st.session_state.get("events_df"), pd.DataFrame) and not st.session_state["events_df"].empty
+            else "detect"
+        )
+    st.session_state["detected_change_dates"] = _events_change_dates()
 
 
 def _inject_brand_styles() -> None:
@@ -216,12 +251,13 @@ def trend_detection_ui(plot_df: pd.DataFrame, target_col: Optional[str]) -> list
         dates = [pd.to_datetime(s_idx[i]) for i in bkps if i < len(s_idx)]
         st.markdown(f"**Detected change dates (on {target_col}):**")
         st.markdown(_format_date_badges(dates), unsafe_allow_html=True)
-        st.caption("Tip: To adjust these, use the draggable timeline below (purple bars).")
         # Persist detected dates for the Events editor button
         try:
             change_dates_for_events = [s_idx[i - 1] if i > 0 else s_idx[i] for i in bkps if i < len(s_idx)]
-            st.session_state["detected_change_dates"] = [pd.to_datetime(d) for d in change_dates_for_events]
-            st.session_state["detected_target_col"] = target_col
+            # Only let detection own the markers if we're not currently using Events as the source.
+            if st.session_state.get("markers_source", "detect") != "events":
+                st.session_state["detected_change_dates"] = [pd.to_datetime(d) for d in change_dates_for_events]
+                st.session_state["detected_target_col"] = target_col
         except Exception:
             st.session_state.pop("detected_change_dates", None)
             st.session_state.pop("detected_target_col", None)
@@ -256,6 +292,7 @@ def events_editor() -> None:
                     # De-dupe so multiple clicks don't clobber later edits
                     merged = merged.drop_duplicates(subset=["date", "type", "notes"], keep="first")
                     st.session_state["events_df"] = _clean_events_df(merged)
+                    _set_markers_from_events()
                     st.rerun()
 
     # The editable grid. Do *not* overwrite events_df here unless the grid actually changed.
@@ -310,6 +347,7 @@ def events_editor() -> None:
                 else pd.DataFrame([new_row])
             )
             st.session_state["events_df"] = _clean_events_df(merged)
+            _set_markers_from_events()
             st.rerun()
 
 
@@ -1199,6 +1237,12 @@ def render_save_load() -> None:
                 apply_session_bundle(uploaded)
                 st.success("Session restored. Switching to Simulator…")
                 st.session_state["switch_to_sim"] = True
+                st.session_state["markers_source"] = (
+                    "events"
+                    if isinstance(st.session_state.get("events_df"), pd.DataFrame)
+                    and not st.session_state["events_df"].empty
+                    else "detect"
+                )
                 st.rerun()
             except Exception as e:
                 st.error(f"Failed to load bundle: {e}")
@@ -1374,7 +1418,9 @@ def _ui_series_chart(plot_df: pd.DataFrame) -> tuple[bool, bool]:
     )
     show_total = st.checkbox("Show Total line", value=("Paid" not in plot_df.columns))
     series_title = "Series (Paid is dashed)" if (use_dual_axis and "Paid" in plot_df.columns) else "Series"
-    chart = plot_series(plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title)
+    base = plot_series(plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title)
+    rules = _event_rules_from_events() if st.session_state.get("markers_source", "detect") == "events" else None
+    chart = alt.layer(base, rules) if rules is not None else base
     st.altair_chart(chart, use_container_width=True)
     return use_dual_axis, show_total
 
