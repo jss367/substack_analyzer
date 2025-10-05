@@ -1426,7 +1426,6 @@ def render_data_import() -> None:
         "We normalize everything to end-of-month (monthly). No headers by default: first column is date, second is count."
     )
     print("Stage 1")
-    print("Stage 1 inputs — plot_df_head=%s" % (st.session_state["plot_df"].head(5).to_dict(orient="records")))
 
     # Quick save/load
     with st.expander("Save / Load (quick access)", expanded=False):
