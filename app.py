@@ -1433,7 +1433,7 @@ def render_data_import() -> None:
         "We normalize everything to end-of-month (monthly). No headers by default: first column is date, second is count."
     )
 
-    logger.info("Stage 1 (logger): entering Data Import")
+    logger.info("Stage 1: entering Data Import")
 
     # Quick save/load
     with st.expander("Save / Load (quick access)", expanded=False):
