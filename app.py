@@ -85,7 +85,9 @@ def _clean_events_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _event_rules_from_events() -> Optional[alt.Chart]:
+    logger.info("_event_rules_from_events has been called")
     ev = st.session_state.get("events_df")
+    logger.info(f"ev: {ev}")
     if not isinstance(ev, pd.DataFrame) or ev.empty or "date" not in ev.columns:
         return None
     ev2 = ev.copy()
@@ -100,6 +102,7 @@ def _event_rules_from_events() -> Optional[alt.Chart]:
     # Persistent: green solid
     ev_p = ev2[ev2.get("effect_norm") == "Persistent"]
     if not ev_p.empty:
+        logger.info("Adding persistent event rules")
         layers.append(
             alt.Chart(ev_p)
             .mark_rule(strokeWidth=2, color="#27ae60")
@@ -117,6 +120,7 @@ def _event_rules_from_events() -> Optional[alt.Chart]:
     # Transient: purple dashed
     ev_t = ev2[ev2.get("effect_norm") == "Transient"]
     if not ev_t.empty:
+        logger.info("Adding transient event rules")
         layers.append(
             alt.Chart(ev_t)
             .mark_rule(strokeWidth=2, color="#8e44ad", strokeDash=[6, 4])
@@ -134,6 +138,7 @@ def _event_rules_from_events() -> Optional[alt.Chart]:
     # No effect: grey dotted
     ev_n = ev2[ev2.get("effect_norm") == "No effect"]
     if not ev_n.empty:
+        logger.info("Adding no effect event rules")
         layers.append(
             alt.Chart(ev_n)
             .mark_rule(strokeWidth=2, color="#bdc3c7", strokeDash=[2, 4])
@@ -380,8 +385,7 @@ def events_editor(plot_df: pd.DataFrame, target_col: Optional[str]) -> None:
     with st.container():
         add_col1, _ = st.columns([1, 3])
         with add_col1:
-            st.caption("Detect change dates and copy them into the Events table.")
-            if st.button("Detect change dates and copy to Events"):
+            if st.button("Detect change dates"):
                 if target_col is None:
                     st.info("No target series selected for detection.")
                 else:
