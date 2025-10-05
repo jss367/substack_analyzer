@@ -5,7 +5,7 @@ from substack_analyzer.calibration import fit_piecewise_logistic, forecast_piece
 
 
 def test_fit_piecewise_logistic_minimal():
-    idx = pd.period_range("2023-01", periods=8, freq="ME").to_timestamp("ME")
+    idx = pd.period_range("2023-01", periods=8, freq="M").to_timestamp("M")
     # Simple increasing series
     s = pd.Series(np.linspace(100, 200, num=8), index=idx)
     fit = fit_piecewise_logistic(s, breakpoints=[4])
@@ -26,7 +26,7 @@ def test_forecast_piecewise_logistic_shapes():
 
 
 def test_fit_piecewise_logistic_requires_minimum_length():
-    idx = pd.period_range("2024-01", periods=3, freq="ME").to_timestamp("ME")
+    idx = pd.period_range("2024-01", periods=3, freq="M").to_timestamp("M")
     s = pd.Series([100, 101, 102], index=idx)
     try:
         fit_piecewise_logistic(s)
@@ -36,7 +36,7 @@ def test_fit_piecewise_logistic_requires_minimum_length():
 
 
 def test_fit_piecewise_logistic_single_segment_when_no_breakpoints():
-    idx = pd.period_range("2023-01", periods=10, freq="ME").to_timestamp("ME")
+    idx = pd.period_range("2023-01", periods=10, freq="M").to_timestamp("M")
     s = pd.Series(np.linspace(50, 150, num=10), index=idx)
     fit = fit_piecewise_logistic(s, breakpoints=None)
     assert len(fit.segment_growth_rates) == 1
@@ -53,7 +53,7 @@ def test_fit_piecewise_logistic_two_segment_rates_ordered():
     for _ in range(5):
         vals.append(v)
         v += 5
-    idx = pd.period_range("2023-01", periods=len(vals), freq="ME").to_timestamp("ME")
+    idx = pd.period_range("2023-01", periods=len(vals), freq="M").to_timestamp("M")
     s = pd.Series(vals, index=idx)
 
     fit = fit_piecewise_logistic(s, breakpoints=[5])
@@ -63,7 +63,7 @@ def test_fit_piecewise_logistic_two_segment_rates_ordered():
 
 def test_fit_piecewise_logistic_events_reduce_sse():
     # Series with a one-time spike in delta that events can explain
-    idx = pd.period_range("2024-01", periods=7, freq="ME").to_timestamp("ME")
+    idx = pd.period_range("2024-01", periods=7, freq="M").to_timestamp("M")
     s = pd.Series([100, 100, 120, 120, 120, 120, 120], index=idx)
 
     # No events
@@ -84,7 +84,7 @@ def test_fit_piecewise_logistic_events_reduce_sse():
 
 def test_fit_piecewise_logistic_exogenous_included_and_handles_nans():
     # Construct deltas driven by an exogenous signal
-    idx = pd.period_range("2024-01", periods=8, freq="ME").to_timestamp("ME")
+    idx = pd.period_range("2024-01", periods=8, freq="M").to_timestamp("M")
     exog_deltas = [0, 2, 0, 2, 0, 2, 0]
     s_vals = [100]
     for d in exog_deltas:
