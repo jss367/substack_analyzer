@@ -147,7 +147,7 @@ def apply_session_bundle(file_like) -> None:
                 )
                 s_t = pd.to_numeric(s_t, errors="coerce").dropna()
                 if not s_t.empty:
-                    s_t.index = s_t.index.to_period("ME").to_timestamp("ME")
+                    s_t.index = s_t.index.to_period("M").to_timestamp("M")
                     st.session_state["import_total"] = s_t.sort_index()
 
         # series: paid
@@ -161,7 +161,7 @@ def apply_session_bundle(file_like) -> None:
                 )
                 s_p = pd.to_numeric(s_p, errors="coerce").dropna()
                 if not s_p.empty:
-                    s_p.index = s_p.index.to_period("ME").to_timestamp("ME")
+                    s_p.index = s_p.index.to_period("M").to_timestamp("M")
                     st.session_state["import_paid"] = s_p.sort_index()
 
         # events
@@ -176,7 +176,7 @@ def apply_session_bundle(file_like) -> None:
         with suppress(KeyError, Exception):
             cov = pd.read_csv(io.BytesIO(zf.read("covariates.csv")))
             if {"date", "ad_spend"}.issubset(cov.columns):
-                cov["date"] = pd.to_datetime(cov["date"]).dt.to_period("ME").dt.to_timestamp("ME")
+                cov["date"] = pd.to_datetime(cov["date"]).dt.to_period("M").dt.to_timestamp("M")
                 st.session_state["covariates_df"] = cov.set_index("date").sort_index()
 
         # features
@@ -184,7 +184,7 @@ def apply_session_bundle(file_like) -> None:
             feat = pd.read_csv(io.BytesIO(zf.read("features.csv")))
             need = {"date", "pulse", "step", "adstock", "ad_effect_log"}
             if need.issubset(feat.columns):
-                feat["date"] = pd.to_datetime(feat["date"]).dt.to_period("ME").to_timestamp("ME")
+                feat["date"] = pd.to_datetime(feat["date"]).dt.to_period("M").to_timestamp("M")
                 st.session_state["features_df"] = feat.set_index("date").sort_index()
 
         # Ensure required keys exist even if the bundle lacks certain artifacts

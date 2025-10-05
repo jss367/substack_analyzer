@@ -1144,7 +1144,7 @@ def render_estimators() -> None:
             if ev2 is not None and not ev2.empty:
                 ev2 = ev2.copy()
                 # Coerce invalid dates to NaT then drop them
-                ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce").dt.to_period("ME").dt.to_timestamp("ME")
+                ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce").dt.to_period("M").dt.to_timestamp("M")
                 ev2 = ev2.dropna(subset=["date"])  # keep only rows with valid dates
                 rows = []
                 for _, r in ev2.iterrows():
