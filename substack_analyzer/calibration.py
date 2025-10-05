@@ -63,6 +63,8 @@ def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]
         persistence = str(row.get("persistence", "")).strip().lower()
         if when in index:
             i = int(index.get_loc(when))
+            if persistence == "no effect":
+                continue
             if persistence == "persistent":
                 step[index >= when] += 1.0
             elif persistence == "transient":

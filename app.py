@@ -56,6 +56,15 @@ TYPE_TO_PERSISTENCE = {
     "change": "Transient",
     "other": None,
 }
+EVENT_TYPE_OPTIONS = [
+    "Ad spend",
+    "Shout-out",
+    "Viral post",
+    "Launch",
+    "Paywall change",
+    "Change",
+    "Other",
+]
 if "events_df" not in st.session_state:
     st.session_state["events_df"] = pd.DataFrame(columns=EVENTS_COLUMNS)
 
@@ -109,8 +118,19 @@ def _events_change_dates() -> list[pd.Timestamp]:
         return []
     ev2 = ev.copy()
     ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce")
-    # Use only "Change" rows for change-point markers; tweak if you want all events
-    mask = ev2.get("type").astype(str).str.lower().eq("change")
+    # Determine which event types count as breakpoints
+    mode = str(st.session_state.get("breakpoint_mode", "change")).lower()
+    types_series = ev2.get("type").astype(str).str.lower()
+    effect = ev2.get("persistence").astype(str).str.lower()
+    if mode == "all":
+        mask = ev2["date"].notna() & ~effect.eq("no effect")
+    elif mode == "selected":
+        sel = st.session_state.get("breakpoint_types", [])
+        sel_l = {str(t).lower() for t in (sel or [])}
+        mask = types_series.isin(sel_l) & ~effect.eq("no effect")
+    else:
+        # default: only explicit "Change" rows
+        mask = types_series.eq("change") & ~effect.eq("no effect")
     return [pd.Timestamp(d) for d in ev2.loc[mask, "date"].dropna().tolist()]
 
 
@@ -349,13 +369,9 @@ def events_editor(plot_df: pd.DataFrame, target_col: Optional[str]) -> None:
         num_rows="dynamic",
         column_config={
             "date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
-            "type": st.column_config.SelectboxColumn(
-                "Type",
-                options=["Ad spend", "Shout-out", "Viral post", "Launch", "Paywall change", "Change", "Other"],
-                width="medium",
-            ),
+            "type": st.column_config.SelectboxColumn("Type", options=EVENT_TYPE_OPTIONS, width="medium"),
             "persistence": st.column_config.SelectboxColumn(
-                "Persistence", options=["Transient", "Persistent"], width="medium"
+                "Effect", options=["No effect", "Transient", "Persistent"], width="medium"
             ),
             "notes": st.column_config.TextColumn("Notes", width="large"),
             "cost": st.column_config.NumberColumn(
@@ -371,11 +387,8 @@ def events_editor(plot_df: pd.DataFrame, target_col: Optional[str]) -> None:
     with st.expander("Quick add event", expanded=False):
         with st.form("quick_add_event_form", clear_on_submit=True):
             qa_date = st.date_input("Date (YYYY-MM-DD)")
-            qa_type = st.selectbox(
-                "Type",
-                ["Ad spend", "Shout-out", "Viral post", "Launch", "Paywall change", "Change", "Other"],
-            )
-            qa_persist = st.selectbox("Persistence", ["Transient", "Persistent"], index=0)
+            qa_type = st.selectbox("Type", EVENT_TYPE_OPTIONS)
+            qa_persist = st.selectbox("Effect", ["No effect", "Transient", "Persistent"], index=1)
             qa_cost = st.number_input("Cost ($)", min_value=0.0, step=10.0, value=0.0, format="%.2f")
             qa_notes = st.text_input("Notes", value="")
             submitted = st.form_submit_button("Add to Events")

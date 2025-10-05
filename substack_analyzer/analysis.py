@@ -279,6 +279,8 @@ def build_events_features(plot_df: pd.DataFrame, lam: float, theta: float, ad_fi
             kind = str(r.get("type", ""))
             weight = cost if kind.lower() in {"ad spend", "ad"} else 1.0
             persistence = str(r.get("persistence", "")).strip().lower()
+            if persistence == "no effect":
+                continue
             if persistence == "persistent":
                 step.loc[d:] += 1.0
             elif persistence == "transient":
