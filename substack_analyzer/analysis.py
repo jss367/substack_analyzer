@@ -40,7 +40,7 @@ def read_series(file_like, has_header: bool, date_sel, count_sel) -> pd.Series:
     )
     s = pd.to_numeric(s, errors="coerce").dropna()
     if not s.empty:
-        s = s.resample("M").last().dropna()
+        s = s.resample("ME").last().dropna()
     return s
 
 
@@ -270,7 +270,7 @@ def build_events_features(plot_df: pd.DataFrame, lam: float, theta: float, ad_fi
     if ev_src is not None and not ev_src.empty:
         ev2 = ev_src.dropna(subset=["date"]).copy()
         with suppress(Exception):
-            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("M").dt.to_timestamp("M")
+            ev2["date"] = pd.to_datetime(ev2["date"]).dt.to_period("ME").dt.to_timestamp("ME")
         for _, r in ev2.iterrows():
             d = r.get("date")
             if pd.isna(d) or d not in monthly_index:
@@ -298,7 +298,7 @@ def build_events_features(plot_df: pd.DataFrame, lam: float, theta: float, ad_fi
             if {"date", "spend"}.issubset(ad_df.columns):
                 ad_df = ad_df.assign(date=lambda d: pd.to_datetime(d["date"]))
                 ad_df = ad_df.dropna(subset=["date"])
-                ad_df["date"] = ad_df["date"].dt.to_period("M").dt.to_timestamp("M")
+                ad_df["date"] = ad_df["date"].dt.to_period("ME").dt.to_timestamp("ME")
                 ad_df = ad_df.groupby("date", as_index=True)["spend"].sum().sort_index()
                 ad_spend = ad_df.reindex(monthly_index).fillna(0.0)
         except Exception:

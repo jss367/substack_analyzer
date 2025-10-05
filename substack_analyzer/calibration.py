@@ -26,7 +26,7 @@ def _ensure_month_end_index(series: pd.Series) -> pd.Series:
     if not isinstance(s.index, pd.DatetimeIndex):
         raise ValueError("Series must have a DatetimeIndex")
     # Normalize to month end to align with app import convention
-    s.index = s.index.to_period("M").to_timestamp("M")
+    s.index = s.index.to_period("ME").to_timestamp("ME")
     s = s.sort_index()
     return s
 
@@ -52,7 +52,7 @@ def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]
     df = events_df.dropna(subset=["date"]).copy()
     if df.empty:
         return np.zeros(len(index)), np.zeros(len(index))
-    df["date"] = pd.to_datetime(df["date"]).dt.to_period("M").dt.to_timestamp("M")
+    df["date"] = pd.to_datetime(df["date"]).dt.to_period("ME").dt.to_timestamp("ME")
     pulse = np.zeros(len(index), dtype=float)
     step = np.zeros(len(index), dtype=float)
     for _, row in df.iterrows():

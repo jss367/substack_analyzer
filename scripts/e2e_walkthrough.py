@@ -28,7 +28,7 @@ VISUALIZE = os.getenv("E2E_VISUALIZE", "1") != "0"
 
 def _make_synthetic_series(n_months: int = 48, seed: int = 7) -> pd.Series:
     rng = np.random.default_rng(seed)
-    idx = pd.period_range("2022-01", periods=n_months, freq="M").to_timestamp("M")
+    idx = pd.period_range("2022-01", periods=n_months, freq="ME").to_timestamp("ME")
     values: list[float] = []
     s = 200.0
     for t in range(n_months):

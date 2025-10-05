@@ -4,7 +4,7 @@ from substack_analyzer.analysis import compute_estimates, derive_adds_churn, rea
 
 
 def test_compute_estimates_with_both_series():
-    idx = pd.period_range("2024-01", periods=6, freq="M").to_timestamp("M")
+    idx = pd.period_range("2024-01", periods=6, freq="ME").to_timestamp("ME")
     all_series = pd.Series([100, 110, 120, 135, 150, 170], index=idx)
     paid_series = pd.Series([10, 12, 13, 15, 17, 20], index=idx)
     est = compute_estimates(all_series, paid_series, window_months=3)
@@ -15,7 +15,7 @@ def test_compute_estimates_with_both_series():
 
 
 def test_derive_adds_churn_happy_path():
-    idx = pd.period_range("2024-01", periods=4, freq="M").to_timestamp("M")
+    idx = pd.period_range("2024-01", periods=4, freq="ME").to_timestamp("ME")
     total = pd.Series([100, 110, 120, 130], index=idx)
     paid = pd.Series([10, 12, 13, 15], index=idx)
     plot_df = pd.DataFrame({"Total": total, "Paid": paid})

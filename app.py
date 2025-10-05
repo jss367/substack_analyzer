@@ -565,7 +565,7 @@ def quick_fit_ui(plot_df: pd.DataFrame, breakpoints: list[int]) -> None:
                 fc_index = pd.date_range(
                     fitted_from_overrides.index[-1] + pd.offsets.MonthEnd(1),
                     periods=horizon_ahead,
-                    freq="M",
+                    freq="ME",
                 )
                 fc_df = pd.DataFrame({"Forecast": fc}, index=fc_index)
                 merged = pd.concat([overlay_df, fc_df], axis=0)
@@ -624,7 +624,7 @@ def tail_view_ui(
             segs_t = [seg for seg in segs if (seg.end_date >= tail_start and seg.start_date <= tail_end)]
             fit_rows_t = []
             for seg in segs_t:
-                xs = pd.date_range(max(seg.start_date, tail_start), min(seg.end_date, tail_end), freq="M")
+                xs = pd.date_range(max(seg.start_date, tail_start), min(seg.end_date, tail_end), freq="ME")
                 start_val = float(full_s.loc[seg.start_date])
                 for i, d in enumerate(xs):
                     fit_rows_t.append({"date": d, "Fit": start_val + seg.slope_per_month * i})
@@ -1123,7 +1123,7 @@ def render_estimators() -> None:
             if ev2 is not None and not ev2.empty:
                 ev2 = ev2.copy()
                 # Coerce invalid dates to NaT then drop them
-                ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce").dt.to_period("M").dt.to_timestamp("M")
+                ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce").dt.to_period("ME").dt.to_timestamp("ME")
                 ev2 = ev2.dropna(subset=["date"])  # keep only rows with valid dates
                 rows = []
                 for _, r in ev2.iterrows():
@@ -1263,7 +1263,7 @@ def _to_monthly_last(s: Optional[pd.Series]) -> Optional[pd.Series]:
         return s
     s2 = pd.to_datetime(pd.Index(s.index), errors="coerce")
     s = pd.Series(pd.to_numeric(s.values, errors="coerce"), index=s2).dropna()
-    return s.resample("M").last()
+    return s.resample("ME").last()
 
 
 def _build_plot_df(all_series: Optional[pd.Series], paid_series: Optional[pd.Series]) -> pd.DataFrame:

@@ -33,7 +33,7 @@ def _make_synthetic_series(
     K is the carrying capacity.
     """
     rng = np.random.default_rng(seed)
-    idx = pd.period_range("2022-01", periods=n_months, freq="M").to_timestamp("M")
+    idx = pd.period_range("2022-01", periods=n_months, freq="ME").to_timestamp("ME")
 
     # Determine growth rates for each segment
     n_segments = n_rate_changes + 1
