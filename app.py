@@ -62,7 +62,6 @@ EVENT_TYPE_OPTIONS = [
     "Viral post",
     "Launch",
     "Paywall change",
-    "Change",
     "Other",
 ]
 if "events_df" not in st.session_state:
@@ -138,7 +137,7 @@ def _events_change_dates() -> list[pd.Timestamp]:
     ev2 = ev.copy()
     ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce")
     # Determine which event types count as breakpoints
-    mode = str(st.session_state.get("breakpoint_mode", "change")).lower()
+    mode = str(st.session_state.get("breakpoint_mode", "all")).lower()
     types_series = ev2.get("type").astype(str).str.lower()
     effect = ev2.get("persistence").astype(str).str.lower()
     if mode == "all":
@@ -148,8 +147,8 @@ def _events_change_dates() -> list[pd.Timestamp]:
         sel_l = {str(t).lower() for t in (sel or [])}
         mask = types_series.isin(sel_l) & ~effect.eq("no effect")
     else:
-        # default: only explicit "Change" rows
-        mask = types_series.eq("change") & ~effect.eq("no effect")
+        # throw error
+        raise ValueError("Invalid breakpoint mode")
     return [pd.Timestamp(d) for d in ev2.loc[mask, "date"].dropna().tolist()]
 
 
@@ -368,9 +367,10 @@ def events_editor(plot_df: pd.DataFrame, target_col: Optional[str]) -> None:
                         seeded = pd.DataFrame(
                             {
                                 "date": [pd.to_datetime(d).date() for d in change_dates_for_events],
-                                "type": ["Change"] * len(change_dates_for_events),
-                                "persistence": ["Transient"] * len(change_dates_for_events),
-                                "notes": [f"Detected change in {target_col}"] * len(change_dates_for_events),
+                                "type": ["Other"] * len(change_dates_for_events),
+                                "persistence": ["Persistent"] * len(change_dates_for_events),
+                                "notes": [f"Automatically detected change in {target_col}"]
+                                * len(change_dates_for_events),
                                 "cost": [0.0] * len(change_dates_for_events),
                             }
                         )
