@@ -1506,7 +1506,7 @@ def render_data_import() -> None:
 
         # Stage 4: Fit
         logger.info(
-            "Stage 4 (logger): inputs — breakpoints=%s, plot_df_head=%s"
+            "Stage 4: inputs — breakpoints=%s, plot_df_head=%s"
             % (breakpoints, ctx.plot_df.head(5).to_dict(orient="records"))
         )
         with st.expander("Stage 4 inputs (data & breakpoints)", expanded=False):
