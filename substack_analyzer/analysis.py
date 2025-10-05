@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import math
 from contextlib import suppress
 from typing import Optional
@@ -30,10 +28,28 @@ def read_series(file_like, has_header: bool, date_sel, count_sel) -> pd.Series:
         date_col = df.columns[int(date_sel)]
         count_col = df.columns[int(count_sel)]
 
+    def _parse_date_column(values: pd.Series) -> pd.Series:
+        """Parse common date formats without noisy warnings; fall back gracefully."""
+        try:
+            sample = values.dropna().astype(str).head(20)
+            fmt: Optional[str] = None
+            if not sample.empty:
+                if sample.str.match(r"^\d{4}/\d{2}/\d{2}$").all():
+                    fmt = "%Y/%m/%d"
+                elif sample.str.match(r"^\d{4}-\d{2}-\d{2}$").all():
+                    fmt = "%Y-%m-%d"
+                elif sample.str.match(r"^\d{2}/\d{2}/\d{4}$").all():
+                    fmt = "%m/%d/%Y"
+            if fmt is not None:
+                return pd.to_datetime(values, format=fmt, errors="coerce")
+        except Exception:
+            pass
+        return pd.to_datetime(values, errors="coerce")
+
     s = (
         df[[date_col, count_col]]
         .rename(columns={date_col: "date", count_col: "count"})
-        .assign(date=lambda d: pd.to_datetime(d["date"], errors="coerce"))
+        .assign(date=lambda d: _parse_date_column(d["date"]))
         .dropna(subset=["date"])
         .sort_values("date")
         .set_index("date")["count"]
