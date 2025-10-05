@@ -160,12 +160,17 @@ def _event_rules_from_events() -> Optional[alt.Chart]:
 
 
 def _on_events_editor_change():
+    logger.info("_on_events_editor_change has been called")
     grid_df = st.session_state.get("events_editor")
+    logger.info(f"grid_df: {grid_df}")
     try:
         if isinstance(grid_df, pd.DataFrame):
             st.session_state["events_df"] = _clean_events_df(grid_df)
+            logger.info(f"st.session_state['events_df']: {st.session_state['events_df']}")
         else:
+            logger.info(f"grid_df is not a DataFrame, converting to DataFrame")
             st.session_state["events_df"] = _clean_events_df(pd.DataFrame(grid_df))
+            logger.info(f"st.session_state['events_df']: {st.session_state['events_df']}")
         _set_markers_from_events()
     except Exception:
         pass
