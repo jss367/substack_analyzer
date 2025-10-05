@@ -91,31 +91,67 @@ def _event_rules_from_events() -> Optional[alt.Chart]:
     ev2 = ev.copy()
     ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce")
     ev2 = ev2.dropna(subset=["date"])
-    # Color and dash rules by Effect (persistence)
-    effect_domain = ["Persistent", "Transient", "No effect"]
-    effect_colors = ["#27ae60", "#8e44ad", "#bdc3c7"]  # green, purple, grey
-    effect_dashes = [[1, 0], [6, 4], [2, 4]]  # solid, dashed, dotted
+    # Normalize Effect labels for reliable styling
+    eff_map = {"persistent": "Persistent", "transient": "Transient", "no effect": "No effect"}
+    with suppress(Exception):
+        ev2["effect_norm"] = ev2.get("persistence").astype(str).str.strip().str.lower().map(eff_map).fillna("Transient")
 
-    return (
-        alt.Chart(ev2)
-        .mark_rule(strokeWidth=2)
-        .encode(
-            x=alt.X("date:T", title="Date"),
-            color=alt.Color(
-                "persistence:N",
-                title="Effect",
-                scale=alt.Scale(domain=effect_domain, range=effect_colors),
-            ),
-            strokeDash=alt.StrokeDash("persistence:N", scale=alt.Scale(domain=effect_domain, range=effect_dashes)),
-            tooltip=[
-                alt.Tooltip("date:T", title="Date"),
-                alt.Tooltip("type:N", title="Type"),
-                alt.Tooltip("persistence:N", title="Effect"),
-                alt.Tooltip("notes:N", title="Notes"),
-                alt.Tooltip("cost:Q", title="Cost ($)"),
-            ],
+    layers = []
+    # Persistent: green solid
+    ev_p = ev2[ev2.get("effect_norm") == "Persistent"]
+    if not ev_p.empty:
+        layers.append(
+            alt.Chart(ev_p)
+            .mark_rule(strokeWidth=2, color="#27ae60")
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date"),
+                    alt.Tooltip("type:N", title="Type"),
+                    alt.Tooltip("effect_norm:N", title="Effect"),
+                    alt.Tooltip("notes:N", title="Notes"),
+                    alt.Tooltip("cost:Q", title="Cost ($)"),
+                ],
+            )
         )
-    )
+    # Transient: purple dashed
+    ev_t = ev2[ev2.get("effect_norm") == "Transient"]
+    if not ev_t.empty:
+        layers.append(
+            alt.Chart(ev_t)
+            .mark_rule(strokeWidth=2, color="#8e44ad", strokeDash=[6, 4])
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date"),
+                    alt.Tooltip("type:N", title="Type"),
+                    alt.Tooltip("effect_norm:N", title="Effect"),
+                    alt.Tooltip("notes:N", title="Notes"),
+                    alt.Tooltip("cost:Q", title="Cost ($)"),
+                ],
+            )
+        )
+    # No effect: grey dotted
+    ev_n = ev2[ev2.get("effect_norm") == "No effect"]
+    if not ev_n.empty:
+        layers.append(
+            alt.Chart(ev_n)
+            .mark_rule(strokeWidth=2, color="#bdc3c7", strokeDash=[2, 4])
+            .encode(
+                x=alt.X("date:T", title="Date"),
+                tooltip=[
+                    alt.Tooltip("date:T", title="Date"),
+                    alt.Tooltip("type:N", title="Type"),
+                    alt.Tooltip("effect_norm:N", title="Effect"),
+                    alt.Tooltip("notes:N", title="Notes"),
+                    alt.Tooltip("cost:Q", title="Cost ($)"),
+                ],
+            )
+        )
+
+    if not layers:
+        return None
+    return alt.layer(*layers)
 
 
 def _on_events_editor_change():
