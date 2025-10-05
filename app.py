@@ -254,34 +254,23 @@ def emit_observations(plot_df: pd.DataFrame) -> None:
 
 
 def trend_detection_ui(plot_df: pd.DataFrame, target_col: Optional[str]) -> list[int]:
-    st.caption("Detected trend changes help annotate what happened (e.g., shout-outs, ad spend).")
+    st.caption("Detection runs only when you click the Events button above.")
     if target_col is None:
         return []
-    max_bkps = st.slider("Max changes to detect", 0, 8, 3, 1, key="max_changes_detect")
-    try:
-        bkps = detect_change_points(plot_df[target_col], max_changes=max_bkps)
-    except Exception:
-        bkps = []
+    # Let users choose detection sensitivity ahead of time; used when button is clicked.
+    st.slider("Max changes to detect", 0, 8, 3, 1, key="max_changes_detect")
 
+    # Show any previously detected results (if the user clicked the button).
+    bkps = list(st.session_state.get("detected_breakpoints", []))
     if bkps:
         s_idx = plot_df[target_col].dropna().index
         dates = [pd.to_datetime(s_idx[i]) for i in bkps if i < len(s_idx)]
         st.markdown(f"**Detected change dates (on {target_col}):**")
         st.markdown(_format_date_badges(dates), unsafe_allow_html=True)
-        # Persist detected dates for the Events editor button
-        try:
-            change_dates_for_events = [s_idx[i - 1] if i > 0 else s_idx[i] for i in bkps if i < len(s_idx)]
-            # Only let detection own the markers if we're not currently using Events as the source.
-            if st.session_state.get("markers_source", "detect") != "events":
-                st.session_state["detected_change_dates"] = [pd.to_datetime(d) for d in change_dates_for_events]
-                st.session_state["detected_target_col"] = target_col
-        except Exception:
-            st.session_state.pop("detected_change_dates", None)
-            st.session_state.pop("detected_target_col", None)
-    return bkps or []
+    return bkps
 
 
-def events_editor() -> None:
+def events_editor(plot_df: pd.DataFrame, target_col: Optional[str]) -> None:
     st.subheader("Stage 2: Events & annotations")
     st.caption("Track shout-outs, ad campaigns, launches, etc. Dates must match the series timeline.")
 
@@ -289,28 +278,42 @@ def events_editor() -> None:
     with st.container():
         add_col1, _ = st.columns([1, 3])
         with add_col1:
-            if st.button("Add detected change dates to Events"):
-                change_dates = [pd.to_datetime(d).date() for d in st.session_state.get("detected_change_dates", [])]
-                if not change_dates:
-                    st.info("No detected change dates available. Run detection below.")
+            st.caption("Detect change dates and copy them into the Events table.")
+            if st.button("Detect change dates and copy to Events"):
+                if target_col is None:
+                    st.info("No target series selected for detection.")
                 else:
-                    target_col = st.session_state.get("detected_target_col", "series")
-                    seeded = pd.DataFrame(
-                        {
-                            "date": change_dates,
-                            "type": ["Change"] * len(change_dates),
-                            "persistence": ["Transient"] * len(change_dates),  # fill it now
-                            "notes": [f"Detected change in {target_col}"] * len(change_dates),
-                            "cost": [0.0] * len(change_dates),
-                        }
-                    )
-                    base = st.session_state.get("events_df", pd.DataFrame(columns=EVENTS_COLUMNS))
-                    merged = pd.concat([base, seeded], ignore_index=True) if not base.empty else seeded
-                    # De-dupe so multiple clicks don't clobber later edits
-                    merged = merged.drop_duplicates(subset=["date", "type", "notes"], keep="first")
-                    st.session_state["events_df"] = _clean_events_df(merged)
-                    _set_markers_from_events()
-                    st.rerun()
+                    try:
+                        max_bkps = int(st.session_state.get("max_changes_detect", 3))
+                        bkps = detect_change_points(plot_df[target_col], max_changes=max_bkps)
+                    except Exception:
+                        bkps = []
+
+                    if not bkps:
+                        st.info("No change dates detected with current settings.")
+                    else:
+                        s_idx = plot_df[target_col].dropna().index
+                        change_dates_for_events = [s_idx[i - 1] if i > 0 else s_idx[i] for i in bkps if i < len(s_idx)]
+                        st.session_state["detected_breakpoints"] = list(bkps)
+                        st.session_state["detected_change_dates"] = [pd.to_datetime(d) for d in change_dates_for_events]
+                        st.session_state["detected_target_col"] = target_col
+
+                        seeded = pd.DataFrame(
+                            {
+                                "date": [pd.to_datetime(d).date() for d in change_dates_for_events],
+                                "type": ["Change"] * len(change_dates_for_events),
+                                "persistence": ["Transient"] * len(change_dates_for_events),
+                                "notes": [f"Detected change in {target_col}"] * len(change_dates_for_events),
+                                "cost": [0.0] * len(change_dates_for_events),
+                            }
+                        )
+                        base = st.session_state.get("events_df", pd.DataFrame(columns=EVENTS_COLUMNS))
+                        merged = pd.concat([base, seeded], ignore_index=True) if not base.empty else seeded
+                        # De-dupe so multiple clicks don't clobber later edits
+                        merged = merged.drop_duplicates(subset=["date", "type", "notes"], keep="first")
+                        st.session_state["events_df"] = _clean_events_df(merged)
+                        _set_markers_from_events()
+                        st.rerun()
 
     # The editable grid. Do *not* overwrite events_df here unless the grid actually changed.
     st.data_editor(
@@ -1408,8 +1411,8 @@ def _ui_series_chart(plot_df: pd.DataFrame) -> tuple[bool, bool]:
 
 
 def _stage2_events_and_detection(plot_df: pd.DataFrame) -> tuple[list[int], Optional[str]]:
-    events_editor()
     target_col = "Total" if "Total" in plot_df.columns else ("Free" if "Free" in plot_df.columns else None)
+    events_editor(plot_df, target_col)
     bkps = trend_detection_ui(plot_df, target_col)
     return bkps, target_col
 
