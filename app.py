@@ -42,7 +42,7 @@ st.set_page_config(
 # Streamlit logger (appears in deployment logs)
 logger = get_logger(__name__)
 logger.info("App startup: Streamlit logger initialized (hello from logger)")
-print("App startup: print statement reached (hello from print)")
+
 
 # --- Events table: single source of truth ---
 EVENTS_COLUMNS = ["date", "type", "persistence", "notes", "cost"]
@@ -1323,7 +1323,7 @@ def _safe_select_columns(head: pd.DataFrame, key_prefix: str) -> tuple[Optional[
 def _ui_upload_two_files() -> (
     tuple[Optional[Any], bool, Optional[int], Optional[int], Optional[Any], bool, Optional[int], Optional[int]]
 ):
-    print("Uploading two files")
+    logger.info("Uploading two files")
     c_all, c_paid = st.columns(2)
     with c_all:
         all_file, all_has_header, all_date_sel, all_count_sel = upload_panel(
@@ -1429,7 +1429,7 @@ def render_data_import() -> None:
         "Upload two files: All subscribers over time, and Paid subscribers over time. "
         "We normalize everything to end-of-month (monthly). No headers by default: first column is date, second is count."
     )
-    print("Stage 1 (print): entering Data Import")
+
     logger.info("Stage 1 (logger): entering Data Import")
 
     # Quick save/load
@@ -1505,8 +1505,8 @@ def render_data_import() -> None:
         adds_and_churn_ui(ctx.plot_df)
 
         # Stage 4: Fit
-        print(
-            "Stage 4 inputs — breakpoints=%s, plot_df_head=%s"
+        logger.info(
+            "Stage 4 (logger): inputs — breakpoints=%s, plot_df_head=%s"
             % (breakpoints, ctx.plot_df.head(5).to_dict(orient="records"))
         )
         with st.expander("Stage 4 inputs (data & breakpoints)", expanded=False):
