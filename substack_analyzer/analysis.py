@@ -112,7 +112,7 @@ def plot_series(plot_df: pd.DataFrame, use_dual_axis: bool, show_total: bool, se
             )
             layers.append(markers)
 
-    chart = alt.layer(*layers).properties(height=260, padding={"bottom": 20, "left": 5, "right": 5, "top": 5})
+    chart = alt.layer(*layers).properties(height=260)
     if use_dual_axis and ("Paid" in plot_df.columns):
         chart = chart.resolve_scale(y="independent")
     return chart
