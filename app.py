@@ -120,6 +120,61 @@ def _set_markers_from_events() -> None:
     st.session_state["detected_change_dates"] = _events_change_dates()
 
 
+def _normalize_month_end(dates: list[Any]) -> list[pd.Timestamp]:
+    """Coerce arbitrary date-like values to month-end pd.Timestamp and de-duplicate/sort."""
+    if dates is None:
+        return []
+    try:
+        s = pd.to_datetime(pd.Series(list(dates)), errors="coerce")
+        s = s.dropna().dt.to_period("M").dt.to_timestamp("M")
+        vals = [pd.Timestamp(d) for d in pd.unique(s.sort_values())]
+        return vals
+    except Exception:
+        return []
+
+
+def _get_breakpoint_dates() -> list[pd.Timestamp]:
+    """Return stored breakpoint dates as month-end timestamps (sorted, unique)."""
+    raw = st.session_state.get("breakpoint_dates", [])
+    return _normalize_month_end(raw)
+
+
+def _set_breakpoint_dates(dates: list[Any], *, monthly_index: Optional[pd.DatetimeIndex] = None) -> None:
+    """Store breakpoint dates after normalizing to month-end and filtering to timeline if provided."""
+    vals = _normalize_month_end(dates)
+    if monthly_index is not None:
+        vals = [d for d in vals if d in monthly_index]
+    st.session_state["breakpoint_dates"] = vals
+
+
+def _breakpoint_rules_from_dates() -> Optional[alt.Chart]:
+    """Altair rule layer for breakpoint dates (distinct color/dash)."""
+    bps = _get_breakpoint_dates()
+    if not bps:
+        return None
+    df = pd.DataFrame({"date": bps})
+    return (
+        alt.Chart(df)
+        .mark_rule(strokeDash=[3, 3], color="#e74c3c")
+        .encode(x=alt.X("date:T", title="Date"), tooltip=["date:T"])
+    )
+
+
+def _dates_to_breakpoint_indices(dates: list[pd.Timestamp], index: pd.DatetimeIndex) -> list[int]:
+    """Map month-end dates to integer indices into the given monthly index."""
+    if dates is None or len(dates) == 0:
+        return []
+    idxs: list[int] = []
+    for d in _normalize_month_end(dates):
+        try:
+            if d in index:
+                idxs.append(int(index.get_loc(d)))
+        except Exception:
+            continue
+    # unique + sorted + valid interior indices only
+    return sorted(set(i for i in idxs if i is not None))
+
+
 def _inject_brand_styles() -> None:
     ui_inject_brand_styles()
 
@@ -338,6 +393,43 @@ def events_editor(plot_df: pd.DataFrame, target_col: Optional[str]) -> None:
         key="events_editor",
         on_change=_on_events_editor_change,  # <-- commit only on edit
     )
+
+    # Breakpoints editor (dates, independent from Events)
+    with st.expander("Breakpoints (dates)", expanded=False):
+        st.caption("Add/edit/delete breakpoint dates; these control model segments when fitting.")
+        monthly_index = plot_df.index
+        # seed current view
+        current_bps = _get_breakpoint_dates()
+        st.write("Current:", _format_date_badges(current_bps))
+        colb1, colb2, colb3 = st.columns([1, 1, 2])
+        with colb1:
+            if st.button("Seed from detection", key="seed_bp_detect"):
+                # Use last detected change dates if available
+                det = st.session_state.get("detected_change_dates", [])
+                _set_breakpoint_dates(det, monthly_index=monthly_index)
+                st.success("Breakpoints seeded from detection.")
+                st.rerun()
+        with colb2:
+            if st.button("Seed from 'Change' events", key="seed_bp_events"):
+                ev_dates = _events_change_dates()
+                _set_breakpoint_dates(ev_dates, monthly_index=monthly_index)
+                st.success("Breakpoints seeded from Change events.")
+                st.rerun()
+        with colb3:
+            bp_input = st.text_input(
+                "Breakpoint dates (comma-separated YYYY-MM-DD)",
+                value=", ".join(d.strftime("%Y-%m-%d") for d in current_bps),
+                key="bp_dates_text",
+            )
+            if st.button("Save breakpoints", key="save_bp_dates"):
+                try:
+                    parts = [p.strip() for p in bp_input.split(",") if p.strip()]
+                    dates = [pd.to_datetime(p) for p in parts]
+                    _set_breakpoint_dates(dates, monthly_index=monthly_index)
+                    st.success("Breakpoints saved.")
+                    st.rerun()
+                except Exception:
+                    st.warning("Provide valid dates within the series range.")
 
     # Quick-add (do NOT force month-end here)
     with st.expander("Quick add event", expanded=False):
@@ -1404,8 +1496,17 @@ def _ui_series_chart(plot_df: pd.DataFrame) -> tuple[bool, bool]:
     show_total = st.checkbox("Show Total line", value=("Paid" not in plot_df.columns))
     series_title = "Series (Paid is dashed)" if (use_dual_axis and "Paid" in plot_df.columns) else "Series"
     base = plot_series(plot_df, use_dual_axis=use_dual_axis, show_total=show_total, series_title=series_title)
-    rules = _event_rules_from_events() if st.session_state.get("markers_source", "detect") == "events" else None
-    chart = alt.layer(base, rules) if rules is not None else base
+    event_rules = _event_rules_from_events() if st.session_state.get("markers_source", "detect") == "events" else None
+    bp_rules = _breakpoint_rules_from_dates()
+    # If user has breakpoint dates, prefer them as the marker source
+    if bp_rules is not None:
+        st.session_state["markers_source"] = "breakpoints"
+    layers = [base]
+    if event_rules is not None:
+        layers.append(event_rules)
+    if bp_rules is not None:
+        layers.append(bp_rules)
+    chart = alt.layer(*layers)
     st.altair_chart(chart, use_container_width=True)
     return use_dual_axis, show_total
 
@@ -1413,8 +1514,15 @@ def _ui_series_chart(plot_df: pd.DataFrame) -> tuple[bool, bool]:
 def _stage2_events_and_detection(plot_df: pd.DataFrame) -> tuple[list[int], Optional[str]]:
     target_col = "Total" if "Total" in plot_df.columns else ("Free" if "Free" in plot_df.columns else None)
     events_editor(plot_df, target_col)
-    bkps = trend_detection_ui(plot_df, target_col)
-    return bkps, target_col
+    # Prefer user-managed breakpoint dates if present; otherwise show detected
+    detected = trend_detection_ui(plot_df, target_col)
+    bp_dates = _get_breakpoint_dates()
+    if bp_dates:
+        # map dates to indices within target series index
+        idx = plot_df[target_col].dropna().index if target_col is not None else plot_df.index
+        bkps_from_dates = _dates_to_breakpoint_indices(bp_dates, idx)
+        return bkps_from_dates, target_col
+    return detected, target_col
 
 
 def _stage5_tail(
