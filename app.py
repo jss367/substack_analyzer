@@ -1616,12 +1616,16 @@ def render_data_import() -> None:
         adds_and_churn_ui(ctx.plot_df)
 
         # Stage 4: Fit
+        bp_dates_log = _get_breakpoint_dates()
         logger.info(
-            "Stage 4: inputs — breakpoints=%s, plot_df_head=%s"
-            % (breakpoints, ctx.plot_df.head(5).to_dict(orient="records"))
+            "Stage 4: inputs — breakpoints=%s; dates=%s; plot_df_head=%s",
+            breakpoints,
+            [str(d.date()) for d in (bp_dates_log or [])],
+            ctx.plot_df.head(5).to_dict(orient="records"),
         )
         with st.expander("Stage 4 inputs (data & breakpoints)", expanded=False):
-            st.write("Breakpoints:", breakpoints)
+            st.write("Breakpoints (indices):", breakpoints)
+            st.write("Breakpoint dates:", _get_breakpoint_dates())
             st.dataframe(ctx.plot_df, width="stretch")
         quick_fit_ui(ctx.plot_df, breakpoints)
 
