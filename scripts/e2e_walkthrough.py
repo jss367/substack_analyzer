@@ -67,7 +67,7 @@ def _overlay_chart(actual: pd.Series, fitted: pd.Series, title: str) -> None:
             alt.Tooltip("Value:Q"),
         ],
     )
-    st.altair_chart(chart, width="stretch")
+    st.altair_chart(chart, use_container_width=True)
     st.caption(title)
 
 
