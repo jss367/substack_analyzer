@@ -170,7 +170,22 @@ def upload_panel(
     key_prefix: str,
     default_header: bool = False,
 ) -> tuple[Optional[Any], bool, Optional[int], Optional[int]]:
-    """Shared UI for file upload + optional header + column choices."""
+    """Shared UI for file upload + optional header + column choices.
+
+    Returns
+    -------
+    (file_obj, has_header, date_sel, count_sel)
+        - file_obj: The uploaded file-like object, or None if no file selected or preview failed.
+        - has_header: Whether the uploaded file is expected to contain a header row.
+        - date_sel: The zero-based index of the date column derived from a small preview, or None.
+        - count_sel: The zero-based index of the count column derived from a small preview, or None.
+
+    Notes
+    -----
+    - The two selectboxes (date/count column indices) are only shown when a file is present and a
+      preview can be read. If reading the preview fails, an error is shown and file_obj is set to None.
+    - When no file is provided, the returned indices may be defaults and should be treated as optional.
+    """
     file_obj = st.file_uploader(title, type=["csv", "xlsx", "xls"], key=f"{key_prefix}_file", help=help_hint)
     has_header = st.checkbox(
         f"{key_prefix.capitalize()} file has header row", value=default_header, key=f"{key_prefix}_has_header"
@@ -1304,38 +1319,20 @@ def _ui_upload_two_files() -> (
 ):
     c_all, c_paid = st.columns(2)
     with c_all:
-        all_file, all_has_header, _, _ = upload_panel(
+        all_file, all_has_header, all_date_sel, all_count_sel = upload_panel(
             "All subscribers file (CSV/XLSX, often downloaded as `[blogname]_emails_[date].csv`)",
             help_hint="Pick the time series of all subscribers over time.",
             key_prefix="all",
             default_header=False,
         )
-        if all_file is not None:
-            try:
-                head = read_head_preview(all_file, all_has_header, nrows=5)
-                all_date_sel, all_count_sel = _safe_select_columns(head, "all")
-            except Exception as e:
-                st.error(f"Could not read All file: {e}")
-                all_file, all_date_sel, all_count_sel = None, None, None
-        else:
-            all_date_sel, all_count_sel = None, None
 
     with c_paid:
-        paid_file, paid_has_header, _, _ = upload_panel(
+        paid_file, paid_has_header, paid_date_sel, paid_count_sel = upload_panel(
             "Paid subscribers file (CSV/XLSX, often downloaded as `[blogname]_subscribers_[date].csv`)",
             help_hint="Pick the time series of paid subscribers over time.",
             key_prefix="paid",
             default_header=False,
         )
-        if paid_file is not None:
-            try:
-                head = read_head_preview(paid_file, paid_has_header, nrows=5)
-                paid_date_sel, paid_count_sel = _safe_select_columns(head, "paid")
-            except Exception as e:
-                st.error(f"Could not read Paid file: {e}")
-                paid_file, paid_date_sel, paid_count_sel = None, None, None
-        else:
-            paid_date_sel, paid_count_sel = None, None
 
     return (
         all_file,
