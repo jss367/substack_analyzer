@@ -92,11 +92,30 @@ def _event_rules_from_events() -> Optional[alt.Chart]:
     ev2 = ev.copy()
     ev2["date"] = pd.to_datetime(ev2["date"], errors="coerce")
     ev2 = ev2.dropna(subset=["date"])
-    # If you want month-end snapping instead, derive a date_m column here.
+    # Color and dash rules by Effect (persistence)
+    effect_domain = ["Persistent", "Transient", "No effect"]
+    effect_colors = ["#27ae60", "#8e44ad", "#bdc3c7"]  # green, purple, grey
+    effect_dashes = [[1, 0], [6, 4], [2, 4]]  # solid, dashed, dotted
+
     return (
         alt.Chart(ev2)
-        .mark_rule(strokeWidth=2, color="#8e44ad")
-        .encode(x=alt.X("date:T", title="Date"), tooltip=["date:T", "type", "persistence", "notes", "cost"])
+        .mark_rule(strokeWidth=2)
+        .encode(
+            x=alt.X("date:T", title="Date"),
+            color=alt.Color(
+                "persistence:N",
+                title="Effect",
+                scale=alt.Scale(domain=effect_domain, range=effect_colors),
+            ),
+            strokeDash=alt.StrokeDash("persistence:N", scale=alt.Scale(domain=effect_domain, range=effect_dashes)),
+            tooltip=[
+                alt.Tooltip("date:T", title="Date"),
+                alt.Tooltip("type:N", title="Type"),
+                alt.Tooltip("persistence:N", title="Effect"),
+                alt.Tooltip("notes:N", title="Notes"),
+                alt.Tooltip("cost:Q", title="Cost ($)"),
+            ],
+        )
     )
 
 
