@@ -8,6 +8,7 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
+from streamlit.logger import get_logger
 
 from substack_analyzer.analysis import (
     build_events_features,
@@ -37,6 +38,11 @@ st.set_page_config(
     layout="wide",
     page_icon=str(LOGO_ICON) if LOGO_ICON.exists() else (str(LOGO_FULL) if LOGO_FULL.exists() else None),
 )
+
+# Streamlit logger (appears in deployment logs)
+logger = get_logger(__name__)
+logger.info("App startup: Streamlit logger initialized (hello from logger)")
+print("App startup: print statement reached (hello from print)")
 
 # --- Events table: single source of truth ---
 EVENTS_COLUMNS = ["date", "type", "persistence", "notes", "cost"]
@@ -1317,6 +1323,7 @@ def _safe_select_columns(head: pd.DataFrame, key_prefix: str) -> tuple[Optional[
 def _ui_upload_two_files() -> (
     tuple[Optional[Any], bool, Optional[int], Optional[int], Optional[Any], bool, Optional[int], Optional[int]]
 ):
+    print("Uploading two files")
     c_all, c_paid = st.columns(2)
     with c_all:
         all_file, all_has_header, all_date_sel, all_count_sel = upload_panel(
@@ -1422,7 +1429,8 @@ def render_data_import() -> None:
         "Upload two files: All subscribers over time, and Paid subscribers over time. "
         "We normalize everything to end-of-month (monthly). No headers by default: first column is date, second is count."
     )
-    print("Stage 1")
+    print("Stage 1 (print): entering Data Import")
+    logger.info("Stage 1 (logger): entering Data Import")
 
     # Quick save/load
     with st.expander("Save / Load (quick access)", expanded=False):
