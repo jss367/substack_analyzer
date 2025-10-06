@@ -168,9 +168,40 @@ def _on_events_editor_change():
     grid_dict = st.session_state.get("events_editor") or {}
     logger.info(f"grid_dict: {grid_dict}")
     try:
-        rows_or_cols = grid_dict.get("data", grid_dict) if isinstance(grid_dict, dict) else grid_dict
-        df = pd.DataFrame(rows_or_cols)
-        st.session_state["events_df"] = _clean_events_df(df)
+        # Start from current events_df as the source of truth
+        base = st.session_state.get("events_df", pd.DataFrame(columns=EVENTS_COLUMNS)).copy()
+
+        if isinstance(grid_dict, dict):
+            # Apply in-place cell edits
+            edited = grid_dict.get("edited_rows") or {}
+            for row_idx, changes in edited.items():
+                try:
+                    i = int(row_idx)
+                except Exception:
+                    continue
+                for col, val in (changes or {}).items():
+                    if col not in base.columns:
+                        base[col] = None
+                    if 0 <= i < len(base.index):
+                        base.at[base.index[i], col] = val
+
+            # Append any newly added rows
+            added = grid_dict.get("added_rows") or []
+            if isinstance(added, list) and added:
+                base = pd.concat([base, pd.DataFrame(added)], ignore_index=True)
+
+            # Remove any deleted rows by positional index (reverse order)
+            deleted = grid_dict.get("deleted_rows") or []
+            if isinstance(deleted, list) and deleted:
+                drop_idx = sorted([int(x) for x in deleted if str(x).isdigit()], reverse=True)
+                for i in drop_idx:
+                    if 0 <= i < len(base.index):
+                        base = base.drop(base.index[i])
+        else:
+            # Fallback: try to coerce whatever we have into a DataFrame
+            base = pd.DataFrame(grid_dict)
+
+        st.session_state["events_df"] = _clean_events_df(base)
         logger.info(f"st.session_state['events_df']: {st.session_state['events_df']}")
         _set_markers_from_events()
     except Exception:
