@@ -444,7 +444,7 @@ def events_editor(plot_df: pd.DataFrame, target_col: Optional[str]) -> None:
         },
         width="stretch",
         key="events_editor",
-        on_change=_on_events_editor_change,  # <-- commit only on edit
+        on_change=_on_events_editor_change,
     )
 
     # Quick-add (do NOT force month-end here)
