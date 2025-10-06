@@ -1499,6 +1499,8 @@ def _parse_and_normalize_series(
 
 
 def _ui_series_chart(plot_df: pd.DataFrame) -> tuple[bool, bool]:
+    logger.info("_ui_series_chart has been called")
+    logger.info(f"plot_df: {plot_df}")
     if plot_df.empty:
         return False, False
     use_dual_axis = st.checkbox(
