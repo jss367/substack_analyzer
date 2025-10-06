@@ -70,10 +70,13 @@ if "events_df" not in st.session_state:
 
 def _clean_events_df(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize types without changing the date *month/day* a user entered."""
+    logger.info("_clean_events_df has been called")
+    logger.info(f"df: {df}")
     df = df.copy()
     for col in EVENTS_COLUMNS:
         if col not in df.columns:
             df[col] = None
+    logger.info(f"df after adding missing columns: {df}")
     # Coerce types
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
     df["cost"] = pd.to_numeric(df["cost"], errors="coerce")
@@ -81,6 +84,7 @@ def _clean_events_df(df: pd.DataFrame) -> pd.DataFrame:
     typed_lower = df.get("type").astype(str).str.lower()
     need_fill = df.get("persistence").isna() | (df.get("persistence").astype(str).str.len() == 0)
     df.loc[need_fill, "persistence"] = typed_lower.map(TYPE_TO_PERSISTENCE)
+    logger.info(f"df at the end of _clean_events_df: {df}")
     return df
 
 
@@ -161,16 +165,13 @@ def _event_rules_from_events() -> Optional[alt.Chart]:
 
 def _on_events_editor_change():
     logger.info("_on_events_editor_change has been called")
-    grid_df = st.session_state.get("events_editor")
-    logger.info(f"grid_df: {grid_df}")
+    grid_dict = st.session_state.get("events_editor") or {}
+    logger.info(f"grid_dict: {grid_dict}")
     try:
-        if isinstance(grid_df, pd.DataFrame):
-            st.session_state["events_df"] = _clean_events_df(grid_df)
-            logger.info(f"st.session_state['events_df']: {st.session_state['events_df']}")
-        else:
-            logger.info(f"grid_df is not a DataFrame, converting to DataFrame")
-            st.session_state["events_df"] = _clean_events_df(pd.DataFrame(grid_df))
-            logger.info(f"st.session_state['events_df']: {st.session_state['events_df']}")
+        rows_or_cols = grid_dict.get("data", grid_dict) if isinstance(grid_dict, dict) else grid_dict
+        df = pd.DataFrame(rows_or_cols)
+        st.session_state["events_df"] = _clean_events_df(df)
+        logger.info(f"st.session_state['events_df']: {st.session_state['events_df']}")
         _set_markers_from_events()
     except Exception:
         pass

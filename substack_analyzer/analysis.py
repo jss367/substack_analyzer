@@ -30,7 +30,7 @@ def read_series(file_like, has_header: bool, date_sel, count_sel) -> pd.Series:
 
     def _parse_date_column(values: pd.Series) -> pd.Series:
         """Parse common date formats without noisy warnings; fall back gracefully."""
-        try:
+        with suppress(Exception):
             sample = values.dropna().astype(str).head(20)
             fmt: Optional[str] = None
             if not sample.empty:
@@ -42,8 +42,6 @@ def read_series(file_like, has_header: bool, date_sel, count_sel) -> pd.Series:
                     fmt = "%m/%d/%Y"
             if fmt is not None:
                 return pd.to_datetime(values, format=fmt, errors="coerce")
-        except Exception:
-            pass
         return pd.to_datetime(values, errors="coerce")
 
     s = (
