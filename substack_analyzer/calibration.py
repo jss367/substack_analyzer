@@ -55,8 +55,7 @@ def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]
     step = np.zeros(len(index), dtype=float)
     for _, row in df.iterrows():
         when: pd.Timestamp = row["date"]
-        kind = str(row.get("type", ""))
-        # Optional: use cost as weight for pulse; default 1.0
+        # Pulse/step weighting: use cost as weight for any pulse occurrence when provided
         weight = float(row.get("cost", 1.0) or 1.0)
         persistence = str(row.get("persistence", "")).strip().lower()
         if when in index:
@@ -66,18 +65,11 @@ def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]
             if persistence == "persistent":
                 step[index >= when] += 1.0
             elif persistence == "transient":
-                # Pulse at the event month
-                if kind.lower().startswith("ad ") or kind.lower() == "ad spend":
-                    pulse[i] += weight
-                else:
-                    pulse[i] += 1.0
+                # Pulse at the event month (always weight by cost if available)
+                pulse[i] += weight
             else:
-                # Backward-compatibility: both
-                if kind.lower().startswith("ad ") or kind.lower() == "ad spend":
-                    pulse[i] += weight
-                else:
-                    pulse[i] += 1.0
-                step[index >= when] += 1.0
+                # raise an error
+                raise ValueError("Invalid persistence value")
     return pulse, step
 
 

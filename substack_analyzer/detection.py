@@ -1,5 +1,3 @@
-from typing import Optional
-
 import numpy as np
 import pandas as pd
 
@@ -78,7 +76,7 @@ def slope_around(series: pd.Series, event_date: pd.Timestamp, window: int = 6) -
 
 def detect_change_points(
     series: pd.Series,
-    paid: Optional[pd.Series] = None,  # placeholder for future multi-series extension
+    paid: pd.Series | None = None,  # placeholder for future multi-series extension
     max_changes: int = 4,
     min_seg_len: int = 2,
     penalty_scale: float = 4.0,
@@ -142,7 +140,7 @@ def detect_change_points(
         mu = s1 / n_
         return s2 - n_ * mu * mu
 
-    def best_split(a: int, b: int) -> tuple[Optional[int], float]:
+    def best_split(a: int, b: int) -> tuple[int | None, float]:
         """Return (k, gain) for the best split k in (a+min_seg_len ... b-min_seg_len)."""
         L = b - a
         if L < 2 * min_seg_len + 1:

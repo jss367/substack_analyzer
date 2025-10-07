@@ -18,6 +18,7 @@ from substack_analyzer.analysis import (
     read_series,
 )
 from substack_analyzer.calibration import fit_piecewise_logistic, fitted_series_from_params, forecast_piecewise_logistic
+from substack_analyzer.changepoints import breakpoints_for_segments, breakpoints_to_events, classify_breakpoints_effect
 from substack_analyzer.detection import compute_segment_slopes, detect_change_points, slope_around
 from substack_analyzer.model import simulate_growth
 from substack_analyzer.persistence import apply_session_bundle, collect_session_bundle
@@ -428,34 +429,26 @@ def events_editor(plot_df: pd.DataFrame, target_col: Optional[str]) -> None:
                 else:
                     try:
                         max_bkps = int(st.session_state.get("max_changes_detect", 3))
-                        bkps = detect_change_points(plot_df[target_col], max_changes=max_bkps)
+                        cand = detect_change_points(plot_df[target_col], max_changes=max_bkps)
                     except Exception:
-                        bkps = []
+                        cand = []
 
-                    if not bkps:
+                    if not cand:
                         st.info("No change dates detected with current settings.")
                     else:
-                        s_idx = plot_df[target_col].dropna().index
-                        change_dates_for_events = [s_idx[i - 1] if i > 0 else s_idx[i] for i in bkps if i < len(s_idx)]
-                        st.session_state["detected_breakpoints"] = list(bkps)
-                        st.session_state["detected_change_dates"] = [pd.to_datetime(d) for d in change_dates_for_events]
-                        st.session_state["detected_target_col"] = target_col
-
-                        seeded = pd.DataFrame(
-                            {
-                                "date": [pd.to_datetime(d).date() for d in change_dates_for_events],
-                                "type": ["Other"] * len(change_dates_for_events),
-                                "persistence": ["Persistent"] * len(change_dates_for_events),
-                                "notes": [f"Automatically detected change in {target_col}"]
-                                * len(change_dates_for_events),
-                                "cost": [0.0] * len(change_dates_for_events),
-                            }
-                        )
+                        s = plot_df[target_col].dropna()
+                        classified = classify_breakpoints_effect(s, cand, window=6)
+                        seeded = breakpoints_to_events(classified, target_label=target_col)
                         base = st.session_state.get("events_df", pd.DataFrame(columns=EVENTS_COLUMNS))
                         merged = pd.concat([base, seeded], ignore_index=True) if not base.empty else seeded
-                        # De-dupe so multiple clicks don't clobber later edits
                         merged = merged.drop_duplicates(subset=["date", "type", "notes"], keep="first")
                         st.session_state["events_df"] = _clean_events_df(merged)
+
+                        seg_bkps = breakpoints_for_segments(classified)
+                        st.session_state["detected_breakpoints"] = seg_bkps
+                        st.session_state["detected_change_dates"] = [s.index[i] for i in seg_bkps if i < len(s.index)]
+                        st.session_state["detected_target_col"] = target_col
+
                         _set_markers_from_events()
                         st.rerun()
 
@@ -467,7 +460,13 @@ def events_editor(plot_df: pd.DataFrame, target_col: Optional[str]) -> None:
             "date": st.column_config.DateColumn("Date", format="YYYY-MM-DD"),
             "type": st.column_config.SelectboxColumn("Type", options=EVENT_TYPE_OPTIONS, width="medium"),
             "persistence": st.column_config.SelectboxColumn(
-                "Effect", options=["No effect", "Transient", "Persistent"], width="medium"
+                "Effect on ΔS",
+                options=["No effect", "Transient", "Persistent"],
+                width="medium",
+                help=(
+                    "Transient = one-month shock (ΔS), S stays higher.\n"
+                    "Persistent = ongoing uplift (ΔS) from this month onward."
+                ),
             ),
             "notes": st.column_config.TextColumn("Notes", width="large"),
             "cost": st.column_config.NumberColumn(
@@ -1556,8 +1555,12 @@ def _stage2_events_and_detection(plot_df: pd.DataFrame) -> tuple[list[int], Opti
     detected = trend_detection_ui(plot_df, target_col)
     change_dates = _events_change_dates()
     idx = plot_df[target_col].dropna().index if target_col is not None else plot_df.index
+    # Only use breakpoints corresponding to rate/mixed from classification if available
     bkps_from_events = _dates_to_breakpoint_indices(change_dates, idx)
-    return (bkps_from_events if bkps_from_events else detected), target_col
+    # Prefer classifier-detected indices (stored in session_state["detected_breakpoints"]) over event-derived
+    bkps_from_classifier = list(st.session_state.get("detected_breakpoints", []))
+    chosen = bkps_from_classifier if bkps_from_classifier else (bkps_from_events if bkps_from_events else detected)
+    return chosen, target_col
 
 
 def _stage5_tail(
