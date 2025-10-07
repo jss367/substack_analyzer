@@ -280,5 +280,5 @@ def fitted_series_from_params(
             delta += float(gamma_exog) * float(exog[t - 1])
         s_hat.append(max(s_hat[-1] + delta, 0.0))
 
-    # Return integer-valued series (round to nearest) to reflect subscriber counts
-    return pd.Series(np.rint(s_hat).astype(int), index=s.index)
+    # Return float-valued series to exactly match the fitted recursion
+    return pd.Series(np.asarray(s_hat, dtype=float), index=s.index)

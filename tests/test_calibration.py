@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 
 from substack_analyzer.calibration import fit_piecewise_logistic, fitted_series_from_params, forecast_piecewise_logistic
-from substack_analyzer.detection import detect_change_points
+from substack_analyzer.changepoints import breakpoints_for_segments, detect_and_classify
 
 
 def test_fit_piecewise_logistic_minimal():
@@ -70,14 +70,8 @@ def test_fit_piecewise_logistic_events_reduce_sse():
     # No events
     fit_no_events = fit_piecewise_logistic(s, breakpoints=[])
 
-    # Transient event at the month of the spike (aligned to y index)
-    events_df = pd.DataFrame(
-        {
-            "date": [idx[2]],
-            "type": ["promo"],
-            "persistence": ["transient"],
-        }
-    )
+    # Transient event at the month of the spike (case-insensitive accepted)
+    events_df = pd.DataFrame({"date": [idx[2]], "type": ["promo"], "persistence": ["Transient"]})
     fit_with_events = fit_piecewise_logistic(s, breakpoints=[], events_df=events_df)
 
     assert fit_with_events.sse < fit_no_events.sse
@@ -201,9 +195,10 @@ def test_fit_piecewise_logistic_on_provided_real_series():
     idx = pd.period_range("2021-10", periods=len(vals), freq="M").to_timestamp("M")
     input_series = pd.Series(vals, index=idx)
 
-    # Propose breakpoints via change-point detection
-    bkps = detect_change_points(input_series, max_changes=4)
-    # Fit the model with detected breakpoints
+    # Detect and classify, then use only segment-worthy breakpoints
+    classified = detect_and_classify(input_series, max_changes=4, window=6)
+    bkps = breakpoints_for_segments(classified)
+    # Optionally could pass events from classification; not required for this test
     fit = fit_piecewise_logistic(input_series, breakpoints=bkps)
 
     # Basic shape and plausibility checks

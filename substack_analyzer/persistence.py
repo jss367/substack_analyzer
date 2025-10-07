@@ -122,6 +122,11 @@ def collect_session_bundle(include_fit: bool, include_sim: bool) -> bytes:
 
 def apply_session_bundle(file_like) -> None:
     with zipfile.ZipFile(file_like, mode="r") as zf:
+        # Ensure keys exist up-front in headless/test environments
+        if "import_total" not in st.session_state:
+            st.session_state["import_total"] = pd.Series(dtype=float)
+        if "import_paid" not in st.session_state:
+            st.session_state["import_paid"] = pd.Series(dtype=float)
         # metadata
         with suppress(KeyError, Exception):
             meta = json.loads(zf.read("metadata.json"))
@@ -132,7 +137,9 @@ def apply_session_bundle(file_like) -> None:
         with suppress(KeyError, Exception):
             state = json.loads(zf.read("state.json"))
             if isinstance(state, dict):
-                st.session_state["_pending_state_update"] = state
+                # Apply scalar config state directly to session state in headless/tests
+                for k, v in state.items():
+                    st.session_state[k] = v
 
         # series: total
         with suppress(KeyError, Exception):
@@ -146,7 +153,7 @@ def apply_session_bundle(file_like) -> None:
                 s_t = pd.to_numeric(s_t, errors="coerce").dropna()
                 if not s_t.empty:
                     s_t.index = s_t.index.to_period("M").to_timestamp("M")
-                    st.session_state["import_total"] = s_t.sort_index()
+                    st.session_state.update({"import_total": s_t.sort_index()})
 
         # series: paid
         with suppress(KeyError, Exception):
@@ -160,7 +167,7 @@ def apply_session_bundle(file_like) -> None:
                 s_p = pd.to_numeric(s_p, errors="coerce").dropna()
                 if not s_p.empty:
                     s_p.index = s_p.index.to_period("M").to_timestamp("M")
-                    st.session_state["import_paid"] = s_p.sort_index()
+                    st.session_state.update({"import_paid": s_p.sort_index()})
 
         # events
         with suppress(KeyError, Exception):
@@ -168,14 +175,14 @@ def apply_session_bundle(file_like) -> None:
             if not ev.empty:
                 with suppress(Exception):
                     ev["date"] = pd.to_datetime(ev["date"]).dt.date
-                st.session_state["events_df"] = ev
+                st.session_state.update({"events_df": ev})
 
         # covariates
         with suppress(KeyError, Exception):
             cov = pd.read_csv(io.BytesIO(zf.read("covariates.csv")))
             if {"date", "ad_spend"}.issubset(cov.columns):
                 cov["date"] = pd.to_datetime(cov["date"]).dt.to_period("M").dt.to_timestamp("M")
-                st.session_state["covariates_df"] = cov.set_index("date").sort_index()
+                st.session_state.update({"covariates_df": cov.set_index("date").sort_index()})
 
         # features
         with suppress(KeyError, Exception):
@@ -183,9 +190,11 @@ def apply_session_bundle(file_like) -> None:
             need = {"date", "pulse", "step", "adstock", "ad_effect_log"}
             if need.issubset(feat.columns):
                 feat["date"] = pd.to_datetime(feat["date"]).dt.to_period("M").to_timestamp("M")
-                st.session_state["features_df"] = feat.set_index("date").sort_index()
+                st.session_state.update({"features_df": feat.set_index("date").sort_index()})
 
         # Ensure required keys exist even if the bundle lacks certain artifacts
         # This helps in headless/test environments where session_state may not persist
         if "import_total" not in st.session_state:
-            st.session_state["import_total"] = pd.Series(dtype=float)
+            st.session_state.update({"import_total": pd.Series(dtype=float)})
+        if "import_paid" not in st.session_state:
+            st.session_state.update({"import_paid": pd.Series(dtype=float)})

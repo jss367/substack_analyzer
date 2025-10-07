@@ -71,3 +71,24 @@ def test_detect_change_points_constant_slope_returns_empty():
     idx = pd.period_range("2024-01", periods=10, freq="M").to_timestamp("M")
     s = pd.Series(range(10), index=idx)
     assert detect_change_points(s, max_changes=5) == []
+
+
+def test_detect_change_points_accelerated_growth_like_chart():
+    # Build a series similar to the provided chart:
+    # Sep 2023..Jun 2025: slow/steady growth; Jul..Sep 2025: sharp acceleration
+    idx = pd.period_range("2023-09", periods=25, freq="M").to_timestamp("M")
+    values = [0]
+    # Slow trend for 22 months after the first value -> 23 total so far
+    for _ in range(22):
+        values.append(values[-1] + 80)
+    # Sharp acceleration (Jul, Aug, Sep 2025)
+    values.append(values[-1] + 1600)
+    values.append(values[-1] + 1600)
+    # Keep exactly 25 values to match index length
+    # The last append would make it 26, so skip it.
+
+    s = pd.Series(values[:25], index=idx)
+
+    # Expect a change-point near Jul 2025 (allow slight off-by-one tolerance)
+    bkps_ts = detect_change_points(s, max_changes=3, return_timestamps=True)
+    assert any(pd.Timestamp("2025-06-30") <= ts <= pd.Timestamp("2025-08-31") for ts in bkps_ts)
