@@ -39,7 +39,7 @@ def _fit_line(y: pd.Series) -> Tuple[float, float]:
 
 
 def classify_breakpoints_effect(
-    s: pd.Series,
+    input_series: pd.Series,
     candidates: List[int],
     window: int = 6,
     z_pulse: float = 3.0,
@@ -47,22 +47,22 @@ def classify_breakpoints_effect(
     level_factor: float = 0.75,
 ) -> List[BreakpointEffect]:
     """Return effect (Transient/Persistent/No effect) and component (pulse/level/rate/mixed/none) per candidate."""
-    s = s.dropna().sort_index()
-    if len(s) < (2 * window + 2):
+    input_series = input_series.dropna().sort_index()
+    if len(input_series) < (2 * window + 2):
         return []
-    ds = s.diff().dropna()
+    ds = input_series.diff().dropna()
 
     sig_delta = _mad(ds.to_numpy()) or (np.std(ds.to_numpy(), ddof=1) or 1.0)
-    sig_level = _mad(s.to_numpy()) or (np.std(s.to_numpy(), ddof=1) or 1.0)
+    sig_level = _mad(input_series.to_numpy()) or (np.std(input_series.to_numpy(), ddof=1) or 1.0)
     tau_rate = rate_factor * sig_delta
     tau_level = level_factor * sig_level
 
     out: List[BreakpointEffect] = []
     for k in sorted(set(int(i) for i in candidates)):
-        if k <= 0 or k >= len(s) - 1:
+        if k <= 0 or k >= len(input_series) - 1:
             continue
-        pre_s = s.iloc[max(0, k - window) : k]
-        post_s = s.iloc[k : min(len(s), k + window)]
+        pre_s = input_series.iloc[max(0, k - window) : k]
+        post_s = input_series.iloc[k : min(len(input_series), k + window)]
         pre_d = ds.iloc[max(0, k - window) : k]
         post_d = ds.iloc[k : min(len(ds), k + window)]
         if len(pre_s) < 2 or len(post_s) < 2 or len(pre_d) < 1 or len(post_d) < 1:
@@ -78,7 +78,7 @@ def classify_breakpoints_effect(
 
         pred_pre_at_k = a_pre + slope_pre * len(pre_s)
         pred_post_at_k = a_post + slope_post * 0.0
-        level_jump = float(s.iloc[k] - (pred_pre_at_k + pred_post_at_k) / 2.0)
+        level_jump = float(input_series.iloc[k] - (pred_pre_at_k + pred_post_at_k) / 2.0)
         slope_delta = slope_post - slope_pre
 
         # Decide effect & component
@@ -108,7 +108,7 @@ def classify_breakpoints_effect(
         out.append(
             BreakpointEffect(
                 index=k,
-                date=s.index[k].to_period("M").to_timestamp("M"),
+                date=input_series.index[k].to_period("M").to_timestamp("M"),
                 effect=effect,
                 component=component,
                 slope_pre=float(slope_pre),
@@ -145,7 +145,7 @@ def breakpoints_for_segments(bps: List[BreakpointEffect]) -> List[int]:
 
 
 def detect_and_classify(
-    s: pd.Series,
+    input_series: pd.Series,
     *,
     # detection knobs (mirror current detector defaults)
     max_changes: int = 4,
@@ -160,17 +160,17 @@ def detect_and_classify(
     candidates: Optional[List[int]] = None,
 ) -> List[BreakpointEffect]:
     """Detect candidate change points and classify their effects/components in one call."""
-    s = s.dropna().sort_index()
+    input_series = input_series.dropna().sort_index()
     if candidates is None:
         candidates = detect_change_points(
-            s,
+            input_series,
             max_changes=max_changes,
             min_seg_len=min_seg_len,
             penalty_scale=penalty_scale,
             return_timestamps=False,
         )
     return classify_breakpoints_effect(
-        s,
+        input_series,
         candidates=candidates or [],
         window=window,
         z_pulse=z_pulse,

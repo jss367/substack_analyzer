@@ -140,7 +140,7 @@ def test_fit_piecewise_logistic_three_breaks_mixed_persistence_events():
     assert fit_mixed.sse <= fit_all_transient.sse
 
 
-def test_fit_piecewise_logistic_on_provided_real_series():
+def test_fit_piecewise_logistic_on_cy_series():
 
     vals = [
         0,

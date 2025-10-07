@@ -7,6 +7,21 @@ from datetime import datetime, timezone
 import pandas as pd
 import streamlit as st
 
+# Stabilize Streamlit session_state when running headless (pytest or plain Python)
+try:
+    from streamlit import runtime as _st_runtime
+
+    if not _st_runtime.exists():
+        import streamlit.runtime.state.session_state_proxy as _ssp
+        from streamlit.runtime.state.safe_session_state import SafeSessionState as _SafeSS
+        from streamlit.runtime.state.session_state import SessionState as _SS
+
+        if not hasattr(st, "_sa_headless_state"):
+            st._sa_headless_state = _SafeSS(_SS(), lambda: None)
+        _ssp.get_session_state = lambda: st._sa_headless_state  # type: ignore[assignment]
+except Exception:
+    pass
+
 
 def collect_session_bundle(include_fit: bool, include_sim: bool) -> bytes:
     buf = io.BytesIO()
@@ -121,6 +136,23 @@ def collect_session_bundle(include_fit: bool, include_sim: bool) -> bytes:
 
 
 def apply_session_bundle(file_like) -> None:
+    # In headless/tests, Streamlit may not maintain a persistent SessionState.
+    # Create a stable SafeSessionState and monkeypatch the getter so subsequent
+    # accesses within this process see the same backing state.
+    try:
+        from streamlit import runtime as _st_runtime
+
+        if not _st_runtime.exists():
+            import streamlit.runtime.state.session_state_proxy as _ssp
+            from streamlit.runtime.state.safe_session_state import SafeSessionState as _SafeSS
+            from streamlit.runtime.state.session_state import SessionState as _SS
+
+            if not hasattr(st, "_sa_headless_state"):
+                st._sa_headless_state = _SafeSS(_SS(), lambda: None)
+            _ssp.get_session_state = lambda: st._sa_headless_state  # type: ignore[assignment]
+    except Exception:
+        pass
+
     with zipfile.ZipFile(file_like, mode="r") as zf:
         # Ensure keys exist up-front in headless/test environments
         if "import_total" not in st.session_state:
