@@ -1,8 +1,10 @@
 from dataclasses import dataclass
-from typing import List, Literal, Tuple
+from typing import List, Literal, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+
+from substack_analyzer.detection import detect_change_points
 
 Effect = Literal["Transient", "Persistent", "No effect"]
 Component = Literal["pulse", "level", "rate", "mixed", "none"]
@@ -140,3 +142,38 @@ def breakpoints_to_events(bps: List[BreakpointEffect], target_label: str) -> pd.
 def breakpoints_for_segments(bps: List[BreakpointEffect]) -> List[int]:
     # Only rate/mixed imply an r change; those set the piecewise segments
     return sorted(set(b.index for b in bps if b.effect == "Persistent" and b.component in {"rate", "mixed"}))
+
+
+def detect_and_classify(
+    s: pd.Series,
+    *,
+    # detection knobs (mirror current detector defaults)
+    max_changes: int = 4,
+    min_seg_len: int = 2,
+    penalty_scale: float = 4.0,
+    # classification knobs
+    window: int = 6,
+    z_pulse: float = 3.0,
+    rate_factor: float = 0.75,
+    level_factor: float = 0.75,
+    # optional override: provide explicit candidates
+    candidates: Optional[List[int]] = None,
+) -> List[BreakpointEffect]:
+    """Detect candidate change points and classify their effects/components in one call."""
+    s = s.dropna().sort_index()
+    if candidates is None:
+        candidates = detect_change_points(
+            s,
+            max_changes=max_changes,
+            min_seg_len=min_seg_len,
+            penalty_scale=penalty_scale,
+            return_timestamps=False,
+        )
+    return classify_breakpoints_effect(
+        s,
+        candidates=candidates or [],
+        window=window,
+        z_pulse=z_pulse,
+        rate_factor=rate_factor,
+        level_factor=level_factor,
+    )

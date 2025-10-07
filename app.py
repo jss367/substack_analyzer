@@ -18,8 +18,8 @@ from substack_analyzer.analysis import (
     read_series,
 )
 from substack_analyzer.calibration import fit_piecewise_logistic, fitted_series_from_params, forecast_piecewise_logistic
-from substack_analyzer.changepoints import breakpoints_for_segments, breakpoints_to_events, classify_breakpoints_effect
-from substack_analyzer.detection import compute_segment_slopes, detect_change_points, slope_around
+from substack_analyzer.changepoints import breakpoints_for_segments, breakpoints_to_events, detect_and_classify
+from substack_analyzer.detection import compute_segment_slopes, slope_around
 from substack_analyzer.model import simulate_growth
 from substack_analyzer.persistence import apply_session_bundle, collect_session_bundle
 from substack_analyzer.types import AdSpendSchedule, SimulationInputs
@@ -427,17 +427,16 @@ def events_editor(plot_df: pd.DataFrame, target_col: Optional[str]) -> None:
                 if target_col is None:
                     st.info("No target series selected for detection.")
                 else:
-                    try:
-                        max_bkps = int(st.session_state.get("max_changes_detect", 3))
-                        cand = detect_change_points(plot_df[target_col], max_changes=max_bkps)
-                    except Exception:
-                        cand = []
-
-                    if not cand:
+                    s = plot_df[target_col].dropna()
+                    bps = detect_and_classify(
+                        s,
+                        max_changes=int(st.session_state.get("max_changes_detect", 3)),
+                        window=6,
+                    )
+                    if not bps:
                         st.info("No change dates detected with current settings.")
                     else:
-                        s = plot_df[target_col].dropna()
-                        classified = classify_breakpoints_effect(s, cand, window=6)
+                        classified = bps
                         seeded = breakpoints_to_events(classified, target_label=target_col)
                         base = st.session_state.get("events_df", pd.DataFrame(columns=EVENTS_COLUMNS))
                         merged = pd.concat([base, seeded], ignore_index=True) if not base.empty else seeded

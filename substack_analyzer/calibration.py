@@ -68,8 +68,9 @@ def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]
                 # Pulse at the event month (always weight by cost if available)
                 pulse[i] += weight
             else:
-                # raise an error
-                raise ValueError("Invalid persistence value")
+                # Backward-compatibility: both (weight pulse by cost if provided)
+                pulse[i] += weight
+                step[index >= when] += 1.0
     return pulse, step
 
 
