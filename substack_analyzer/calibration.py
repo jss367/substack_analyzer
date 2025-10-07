@@ -264,7 +264,7 @@ def fitted_series_from_params(
             exog = None
 
     # Segment bounds on the original series index
-    seg_bounds = _segments_from_breakpoints(len(s), breakpoints)
+    seg_bounds = _segments_from_breakpoints(len(s), list(breakpoints or []))
     r_list = list(segment_growth_rates)
     if len(r_list) < len(seg_bounds):
         # Pad with last known rate
