@@ -33,3 +33,11 @@ Then, we display our whole equation.
 Then we need to figure out the benefits of our adspend. To do that, we need to find beta, theta, and lambda.
 
 
+
+
+There are two ways to input ad spending data - a spreadsheet up upload them as events.
+
+
+If you must mix, treat Events for discrete shocks and exogenous for continuous spend
+
+Short answer: mark Ads as Transient and let adstock (λ) handle the carryover. Don’t use Persistent for ad spend unless you’re explicitly modeling a permanent step-change (rare).

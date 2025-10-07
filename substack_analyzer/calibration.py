@@ -83,7 +83,7 @@ def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]
 
 def fit_piecewise_logistic(
     total_series: pd.Series,
-    breakpoints: Optional[list[int]] = None,
+    breakpoints: list[int],
     events_df: Optional[pd.DataFrame] = None,
     k_grid: Optional[Sequence[float]] = None,
     extra_exog: Optional[pd.Series] = None,
@@ -98,18 +98,16 @@ def fit_piecewise_logistic(
     - γ_pulse, γ_step, γ_exog are global coefficients.
     - Parameters are estimated by OLS on ΔS_t for each candidate K; pick K with lowest SSE.
     """
-    s = _ensure_month_end_index(total_series)
-    if s.size < 4:
+    input_series = _ensure_month_end_index(total_series)
+    if input_series.size < 4:
         raise ValueError("Need at least 4 months of data to fit the model")
     # Construct deltas and base regressor X_t(K)
-    y = s.diff().dropna()
-    s_lag = s.shift(1).reindex(y.index)
+    y = input_series.diff().dropna()
+    s_lag = input_series.shift(1).reindex(y.index)
     n = y.size
 
-    # Default breakpoints: none (single segment)
-    bp = list(breakpoints or [])
     # Build segments on the index of y (which starts at original index[1])
-    seg_bounds = _segments_from_breakpoints(n + 1, bp)
+    seg_bounds = _segments_from_breakpoints(n + 1, breakpoints)
     num_segments = len(seg_bounds)
 
     # Events
@@ -126,7 +124,7 @@ def fit_piecewise_logistic(
             exog = None
 
     # K grid to do grid search for carrying capacity
-    max_s = float(s.max())
+    max_s = float(input_series.max())
     if k_grid is None:
         k_grid = np.linspace(max_s * 1.1, max_s * 5.0, num=25)
 
@@ -162,8 +160,8 @@ def fit_piecewise_logistic(
         gamma_exog = float(beta[beta_offset]) if exog is not None and len(beta) > beta_offset else None
 
         # Reconstruct fitted series recursively
-        s_hat = [float(s.iloc[0])]
-        for t in range(1, s.size):
+        s_hat = [float(input_series.iloc[0])]
+        for t in range(1, input_series.size):
             x_t = s_hat[-1] * (1.0 - s_hat[-1] / K)
             # Determine which segment t-1 (for ΔS at month t) belongs to
             seg_idx = 0
@@ -181,7 +179,7 @@ def fit_piecewise_logistic(
                 delta += gamma_exog * float(exog[t - 1])
             s_hat.append(max(s_hat[-1] + delta, 0.0))
 
-        fitted = pd.Series(s_hat, index=s.index)
+        fitted = pd.Series(s_hat, index=input_series.index)
         # Residuals on deltas
         y_hat = fitted.diff().reindex(y.index)
         resid = y - y_hat
@@ -192,7 +190,7 @@ def fit_piecewise_logistic(
         fit = PiecewiseLogisticFit(
             carrying_capacity=float(K),
             segment_growth_rates=r_segments,
-            breakpoints=bp,
+            breakpoints=breakpoints,
             gamma_pulse=gamma_pulse,
             gamma_step=gamma_step,
             fitted_series=fitted,
@@ -235,7 +233,7 @@ def forecast_piecewise_logistic(
 
 def fitted_series_from_params(
     total_series: pd.Series,
-    breakpoints: Optional[list[int]],
+    breakpoints: list[int],
     carrying_capacity: float,
     segment_growth_rates: Sequence[float],
     events_df: Optional[pd.DataFrame] = None,
@@ -266,7 +264,7 @@ def fitted_series_from_params(
             exog = None
 
     # Segment bounds on the original series index
-    seg_bounds = _segments_from_breakpoints(len(s), list(breakpoints or []))
+    seg_bounds = _segments_from_breakpoints(len(s), breakpoints)
     r_list = list(segment_growth_rates)
     if len(r_list) < len(seg_bounds):
         # Pad with last known rate
@@ -289,4 +287,5 @@ def fitted_series_from_params(
             delta += float(gamma_exog) * float(exog[t - 1])
         s_hat.append(max(s_hat[-1] + delta, 0.0))
 
-    return pd.Series(s_hat, index=s.index)
+    # Return integer-valued series (round to nearest) to reflect subscriber counts
+    return pd.Series(np.rint(s_hat).astype(int), index=s.index)

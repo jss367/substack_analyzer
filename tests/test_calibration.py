@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from substack_analyzer.calibration import fit_piecewise_logistic, forecast_piecewise_logistic
+from substack_analyzer.calibration import fit_piecewise_logistic, fitted_series_from_params, forecast_piecewise_logistic
+from substack_analyzer.detection import detect_change_points
 
 
 def test_fit_piecewise_logistic_minimal():
@@ -29,7 +30,7 @@ def test_fit_piecewise_logistic_requires_minimum_length():
     idx = pd.period_range("2024-01", periods=3, freq="M").to_timestamp("M")
     s = pd.Series([100, 101, 102], index=idx)
     try:
-        fit_piecewise_logistic(s)
+        fit_piecewise_logistic(s, breakpoints=[])
         assert False, "Expected ValueError for series shorter than 4 months"
     except ValueError:
         pass
@@ -38,7 +39,7 @@ def test_fit_piecewise_logistic_requires_minimum_length():
 def test_fit_piecewise_logistic_single_segment_when_no_breakpoints():
     idx = pd.period_range("2023-01", periods=10, freq="M").to_timestamp("M")
     s = pd.Series(np.linspace(50, 150, num=10), index=idx)
-    fit = fit_piecewise_logistic(s, breakpoints=None)
+    fit = fit_piecewise_logistic(s, breakpoints=[])
     assert len(fit.segment_growth_rates) == 1
     assert fit.carrying_capacity > s.max()
 
@@ -67,7 +68,7 @@ def test_fit_piecewise_logistic_events_reduce_sse():
     s = pd.Series([100, 100, 120, 120, 120, 120, 120], index=idx)
 
     # No events
-    fit_no_events = fit_piecewise_logistic(s, breakpoints=None)
+    fit_no_events = fit_piecewise_logistic(s, breakpoints=[])
 
     # Transient event at the month of the spike (aligned to y index)
     events_df = pd.DataFrame(
@@ -77,7 +78,7 @@ def test_fit_piecewise_logistic_events_reduce_sse():
             "persistence": ["transient"],
         }
     )
-    fit_with_events = fit_piecewise_logistic(s, breakpoints=None, events_df=events_df)
+    fit_with_events = fit_piecewise_logistic(s, breakpoints=[], events_df=events_df)
 
     assert fit_with_events.sse < fit_no_events.sse
 
@@ -94,8 +95,119 @@ def test_fit_piecewise_logistic_exogenous_included_and_handles_nans():
     # exog aligned to y index (length len(s)-1), include NaNs which should be treated as zeros
     exog_series = pd.Series([0.0, 1.0, np.nan, 1.0, 0.0, 1.0, 0.0], index=idx[1:])
 
-    fit_without_exog = fit_piecewise_logistic(s, breakpoints=None)
-    fit_with_exog = fit_piecewise_logistic(s, breakpoints=None, extra_exog=exog_series)
+    fit_without_exog = fit_piecewise_logistic(s, breakpoints=[])
+    fit_with_exog = fit_piecewise_logistic(s, breakpoints=[], extra_exog=exog_series)
 
     assert fit_with_exog.gamma_exog is not None
     assert fit_with_exog.sse < fit_without_exog.sse
+
+
+def test_fit_piecewise_logistic_three_breaks_mixed_persistence_events():
+    """
+    Build a synthetic series with three breakpoints and mixed persistence events.
+    """
+    idx = pd.period_range("2022-01", periods=42, freq="M").to_timestamp("M")
+
+    # Use the simulator to generate a ground-truth series under the same dynamic
+    base_series = pd.Series([30.0] * len(idx), index=idx)
+    breakpoints = [24, 32, 36]  # three breaks → four segments
+    segment_growth_rates = [0.010, 0.017, 0.04, 0.02]
+
+    events_df = pd.DataFrame(
+        {
+            "date": [idx[20], idx[26], idx[34]],
+            "type": ["campaign A", "promo", "campaign B"],
+            "persistence": ["persistent", "transient", "persistent"],
+        }
+    )
+
+    input_series = fitted_series_from_params(
+        total_series=base_series,
+        breakpoints=breakpoints,
+        carrying_capacity=150.0,
+        segment_growth_rates=segment_growth_rates,
+        events_df=events_df,
+        gamma_pulse=3.0,
+        gamma_step=0.6,
+    )
+
+    # Fit with correct mixed persistence
+    fit_mixed = fit_piecewise_logistic(input_series, breakpoints=breakpoints, events_df=events_df)
+
+    # Fit with a mis-specified events table (all transient)
+    events_all_transient = events_df.copy()
+    events_all_transient["persistence"] = "transient"
+    fit_all_transient = fit_piecewise_logistic(input_series, breakpoints=breakpoints, events_df=events_all_transient)
+
+    # Expectations: correct persistence should explain deltas better (lower SSE),
+    # both gamma coefficients should be utilized, and four segment rates returned.
+    assert len(fit_mixed.segment_growth_rates) == 4
+    assert abs(fit_mixed.gamma_step) > 0 or abs(fit_mixed.gamma_pulse) > 0
+    assert fit_mixed.sse <= fit_all_transient.sse
+
+
+def test_fit_piecewise_logistic_on_provided_real_series():
+
+    vals = [
+        0,
+        0,
+        0,
+        2,
+        3,
+        4,
+        4,
+        4,
+        4,
+        5,
+        7,
+        30,
+        31,
+        31,
+        32,
+        33,
+        33,
+        33,
+        33,
+        35,
+        36,
+        36,
+        35,
+        36,
+        39,
+        42,
+        42,
+        44,
+        45,
+        45,
+        47,
+        50,
+        56,
+        60,
+        82,
+        93,
+        104,
+        109,
+        108,
+        116,
+        121,
+        124,
+        128,
+        128,
+        131,
+        134,
+        133,
+        134,
+    ]
+    idx = pd.period_range("2021-10", periods=len(vals), freq="M").to_timestamp("M")
+    input_series = pd.Series(vals, index=idx)
+
+    # Propose breakpoints via change-point detection
+    bkps = detect_change_points(input_series, max_changes=4)
+    # Fit the model with detected breakpoints
+    fit = fit_piecewise_logistic(input_series, breakpoints=bkps)
+
+    # Basic shape and plausibility checks
+    assert len(fit.fitted_series) == len(input_series)
+    assert fit.carrying_capacity > input_series.max()
+    assert len(fit.segment_growth_rates) == (len(bkps) + 1 if bkps else 1)
+    assert fit.sse >= 0.0
