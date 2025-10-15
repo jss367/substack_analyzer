@@ -87,7 +87,7 @@ def test_e2e_walkthrough_headless():
     st.session_state["import_paid"] = paid
 
     # Change-points
-    bkps = detect_change_points(total, max_changes=4, min_seg_len=3)
+    bkps = detect_change_points(total, max_changes=4, min_seg_len=3, return_mode="indices")
     assert isinstance(bkps, list)
 
     # Features (with exogenous)

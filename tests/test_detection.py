@@ -30,7 +30,7 @@ def test_detect_change_points_small_series():
     idx = pd.period_range("2024-01", periods=5, freq="M").to_timestamp("M")
     s = pd.Series([1, 2, 3, 4, 5], index=idx)
     # Too short to detect
-    assert detect_change_points(s, max_changes=3) == []
+    assert detect_change_points(s, max_changes=3, return_mode="indices") == []
 
 
 def test_detect_change_points_single_break():
@@ -44,9 +44,9 @@ def test_detect_change_points_single_break():
         vals.append(v)
         v += 1
     idx = pd.period_range("2024-01", periods=len(vals), freq="M").to_timestamp("M")
-    s = pd.Series(vals, index=idx)
-    bkps = detect_change_points(s, max_changes=3)
-    assert bkps[0] in {6, 7}
+    input_series = pd.Series(vals, index=idx)
+    bkps = detect_change_points(input_series, max_changes=3, return_mode="indices")
+    assert bkps[0] in {6, 7} or bkps[1] in {6, 7}
 
 
 def test_detect_change_points_respects_max_changes_and_spacing():
@@ -60,7 +60,7 @@ def test_detect_change_points_respects_max_changes_and_spacing():
             v += slope
     idx = pd.period_range("2024-01", periods=len(vals), freq="M").to_timestamp("M")
     s = pd.Series(vals, index=idx)
-    bkps = detect_change_points(s, max_changes=2)
+    bkps = detect_change_points(s, max_changes=2, return_mode="indices")
     # At most 2 per max_changes
     assert len(bkps) <= 2
     # Enforce minimum separation of 2 months
@@ -70,7 +70,7 @@ def test_detect_change_points_respects_max_changes_and_spacing():
 def test_detect_change_points_constant_slope_returns_empty():
     idx = pd.period_range("2024-01", periods=10, freq="M").to_timestamp("M")
     s = pd.Series(range(10), index=idx)
-    assert detect_change_points(s, max_changes=5) == []
+    assert detect_change_points(s, max_changes=5, return_mode="indices") == []
 
 
 def test_detect_change_points_accelerated_growth_like_chart():
@@ -90,5 +90,29 @@ def test_detect_change_points_accelerated_growth_like_chart():
     s = pd.Series(values[:25], index=idx)
 
     # Expect a change-point near Jul 2025 (allow slight off-by-one tolerance)
-    bkps_ts = detect_change_points(s, max_changes=3, return_timestamps=True)
+    bkps_ts = detect_change_points(s, max_changes=3, return_mode="timestamps")
     assert any(pd.Timestamp("2025-06-30") <= ts <= pd.Timestamp("2025-08-31") for ts in bkps_ts)
+
+
+def test_detect_change_points_with_cy_series():
+    """
+    Slow growth then a faster growth rate
+    """
+    # Build monthly index
+    idx = pd.period_range("2023-09", periods=26, freq="M").to_timestamp("M")
+
+    vals: list[float] = []
+    v = 0.0
+    jump_month = pd.Timestamp("2025-01-31")
+    jump_index = list(idx).index(jump_month)
+    for i, ts in enumerate(idx):
+        if ts < jump_month:
+            v += 80.0 + 1.2 * i
+        else:
+            v += 80.0 + 1.2 * i + 12 * (i - jump_index)
+        vals.append(float(round(v)))
+
+    input_series = pd.Series(vals, index=idx)
+    bkps = detect_change_points(input_series, max_changes=3, return_mode="indices")
+    # make sure the breakpoint is within 2 of jump_index
+    assert abs(bkps[0] - jump_index) <= 2

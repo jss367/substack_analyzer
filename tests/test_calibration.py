@@ -225,18 +225,15 @@ def test_fit_piecewise_logistic_with_cy_series():
     # a steeper slope thereafter. Keep it deterministic and smooth-ish.
     vals: list[float] = []
     v = 0.0
-    jump_month = pd.Timestamp("2025-07-31")
+    jump_month = pd.Timestamp("2025-01-31")
     jump_index = list(idx).index(jump_month)
     for i, ts in enumerate(idx):
         if ts < jump_month:
             # Early period: ~80 per month with a tiny acceleration
             v += 80.0 + 1.5 * i
         else:
-            # Apply a one-time level jump at the break
-            if i == jump_index:
-                v += 1800.0
             # Post-jump period: substantially faster monthly growth
-            v += 700.0 + 10.0 * (i - jump_index)
+            v += 80.0 + 1.5 * i + 10.0 * (i - jump_index)
         vals.append(float(round(v)))
 
     input_series = pd.Series(vals, index=idx)

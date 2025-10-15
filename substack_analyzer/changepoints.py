@@ -167,7 +167,7 @@ def detect_and_classify(
             max_changes=max_changes,
             min_seg_len=min_seg_len,
             penalty_scale=penalty_scale,
-            return_timestamps=False,
+            return_mode="indices",
         )
     return classify_breakpoints_effect(
         input_series,

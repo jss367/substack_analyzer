@@ -96,5 +96,5 @@ def test_sudden_doubling_is_pulse_step_and_segment_only_if_needed():
 def test_detect_change_points_smoke():
     idx = pd.period_range("2023-01", periods=12, freq="M").to_timestamp("M")
     s = pd.Series([100, 105, 110, 115, 120, 125, 150, 155, 160, 165, 170, 175], index=idx)
-    bkps = detect_change_points(s, max_changes=3)
+    bkps = detect_change_points(s, max_changes=3, return_mode="indices")
     assert isinstance(bkps, list)

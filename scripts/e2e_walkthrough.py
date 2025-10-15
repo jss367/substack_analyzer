@@ -104,7 +104,7 @@ def main() -> None:
 
     # 3) Change-point detection
     st.subheader("2) Detect change points")
-    bkps = detect_change_points(total, max_changes=4, min_seg_len=3)
+    bkps = detect_change_points(total, max_changes=4, min_seg_len=3, return_mode="indices")
     st.write({"breakpoints": bkps})
 
     # 4) Feature building from events
