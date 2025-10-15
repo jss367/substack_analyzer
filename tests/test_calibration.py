@@ -140,7 +140,7 @@ def test_fit_piecewise_logistic_three_breaks_mixed_persistence_events():
     assert fit_mixed.sse <= fit_all_transient.sse
 
 
-def test_fit_piecewise_logistic_on_cy_series():
+def test_fit_piecewise_logistic_on_gm_series():
 
     vals = [
         0,
@@ -194,6 +194,11 @@ def test_fit_piecewise_logistic_on_cy_series():
     ]
     idx = pd.period_range("2021-10", periods=len(vals), freq="M").to_timestamp("M")
     input_series = pd.Series(vals, index=idx)
+    # now plot the series
+    # import matplotlib.pyplot as plt
+
+    # plt.plot(input_series)
+    # plt.show()
 
     # Detect and classify, then use only segment-worthy breakpoints
     classified = detect_and_classify(input_series, max_changes=4, window=6)
@@ -205,4 +210,50 @@ def test_fit_piecewise_logistic_on_cy_series():
     assert len(fit.fitted_series) == len(input_series)
     assert fit.carrying_capacity > input_series.max()
     assert len(fit.segment_growth_rates) == (len(bkps) + 1 if bkps else 1)
+    assert fit.sse >= 0.0
+
+
+def test_fit_piecewise_logistic_with_cy_series():
+    """
+    Synthetic series shaped like the provided chart: slow growth through mid-2025,
+    then a sharp level jump around July 2025 followed by faster growth.
+    """
+    # Build monthly index from Sep 2023 through Oct 2025
+    idx = pd.period_range("2023-09", periods=26, freq="M").to_timestamp("M")
+
+    # Construct values: gentle acceleration, then a level jump in 2025-07 and
+    # a steeper slope thereafter. Keep it deterministic and smooth-ish.
+    vals: list[float] = []
+    v = 0.0
+    jump_month = pd.Timestamp("2025-07-31")
+    jump_index = list(idx).index(jump_month)
+    for i, ts in enumerate(idx):
+        if ts < jump_month:
+            # Early period: ~80 per month with a tiny acceleration
+            v += 80.0 + 1.5 * i
+        else:
+            # Apply a one-time level jump at the break
+            if i == jump_index:
+                v += 1800.0
+            # Post-jump period: substantially faster monthly growth
+            v += 700.0 + 10.0 * (i - jump_index)
+        vals.append(float(round(v)))
+
+    input_series = pd.Series(vals, index=idx)
+
+    # Detect and classify breakpoints; expect a persistent change near July 2025
+    classified = detect_and_classify(input_series, max_changes=3, window=6)
+    near_jump = [b for b in classified if b.effect == "Persistent" and abs((b.date - jump_month).days) <= 31]
+    assert near_jump
+
+    # Fit using segment-worthy breakpoints and validate basic properties
+    bkps = breakpoints_for_segments(classified)
+    fit = fit_piecewise_logistic(input_series, breakpoints=bkps)
+
+    assert len(fit.fitted_series) == len(input_series)
+    assert fit.carrying_capacity > input_series.max()
+    assert len(fit.segment_growth_rates) == (len(bkps) + 1 if bkps else 1)
+    if len(fit.segment_growth_rates) >= 2:
+        # Later growth should be faster than the early growth in this scenario
+        assert fit.segment_growth_rates[-1] > fit.segment_growth_rates[0]
     assert fit.sse >= 0.0
