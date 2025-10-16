@@ -63,14 +63,14 @@ def _event_regressors(index: pd.DatetimeIndex, events_df: Optional[pd.DataFrame]
             if persistence == "no effect":
                 continue
             if persistence == "persistent":
-                step[index >= when] += 1.0
+                step[index >= when] += weight
             elif persistence == "transient":
                 # Pulse at the event month (always weight by cost if available)
                 pulse[i] += weight
             else:
                 # Backward-compatibility: both (weight pulse by cost if provided)
                 pulse[i] += weight
-                step[index >= when] += 1.0
+                step[index >= when] += weight
     return pulse, step
 
 
@@ -96,11 +96,14 @@ def fit_piecewise_logistic(
         raise ValueError("Need at least 4 months of data to fit the model")
     # Construct deltas and base regressor X_t(K)
     y = input_series.diff().dropna()
-    s_lag = input_series.shift(1).reindex(y.index)
+    s_lag = input_series.shift(1).reindex(y.index).astype(float)
     n = y.size
 
     # Build segments on the index of y (which starts at original index[1])
-    seg_bounds = _segments_from_breakpoints(n + 1, breakpoints)
+    # Sanitize breakpoints relative to original series length (len(input_series))
+    n_series = len(input_series)
+    bps = sorted(set(int(b) for b in breakpoints if 1 <= int(b) <= n_series - 2)) if breakpoints else []
+    seg_bounds = _segments_from_breakpoints(n_series, bps)
     num_segments = len(seg_bounds)
 
     # Events
@@ -121,7 +124,12 @@ def fit_piecewise_logistic(
     # K grid to do grid search for carrying capacity
     max_s = float(input_series.max())
     if k_grid is None:
-        k_grid = np.concatenate([np.linspace(max_s * 1.1, max_s * 5.0, 25), np.linspace(max_s * 6.0, max_s * 10.0, 10)])
+        k_grid = np.concatenate(
+            [
+                np.linspace(max_s * 1.1, max_s * 5.0, 25),
+                np.linspace(max_s * 6.0, max_s * 10.0, 10),
+            ]
+        )
 
     best: Optional[PiecewiseLogisticFit] = None
     best_sse = np.inf
@@ -133,12 +141,17 @@ def fit_piecewise_logistic(
         for start, end in seg_bounds:
             if end < start:  # empty
                 continue
+            # seg_bounds are already in Δ-space → no shift
+            lo = max(0, start)  # inclusive
+            hi = min(n, end + 1)  # exclusive
+
             mask = np.zeros(n, dtype=float)
-            lo = max(0, start)
-            hi = min(n, end + 1)  # marks i in [start, end]
-            if lo >= hi:
-                continue
-            X_cols.append(X_base * mask.__setitem__(slice(lo, hi), 1.0) or mask)
+            if lo < hi:  # segment has rows → mark them
+                mask[lo:hi] = 1.0
+            # else: leave mask as all zeros (keeps a column for this segment)
+
+            X_cols.append(X_base * mask)
+
         X_cols.append(pulse)
         X_cols.append(step)
         if exog is not None:
@@ -146,11 +159,16 @@ def fit_piecewise_logistic(
         X = np.column_stack(X_cols)
         y_vec = y.to_numpy().astype(float)
 
-        # OLS via least squares
+        # OLS via least squares with ridge fallback if ill-conditioned
         try:
             beta, _, _, _ = np.linalg.lstsq(X, y_vec, rcond=None)
         except np.linalg.LinAlgError:
-            continue
+            # fall back to ridge
+            lam = 1e-6
+            try:
+                beta = np.linalg.solve(X.T @ X + lam * np.eye(X.shape[1]), X.T @ y_vec)
+            except Exception:
+                continue
 
         # Unpack parameters
         r_segments = [float(b) for b in beta[:num_segments]]

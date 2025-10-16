@@ -238,7 +238,7 @@ def test_fit_piecewise_logistic_with_cy_series():
 
     from substack_analyzer.plot_utils import plot_fit_vs_actual
 
-    plot_fit_vs_actual(input_series, fit)
+    # plot_fit_vs_actual(input_series, fit)
 
     assert len(fit.fitted_series) == len(input_series)
     assert fit.carrying_capacity > input_series.max()
