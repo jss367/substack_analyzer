@@ -125,12 +125,14 @@ def fit_piecewise_logistic(
     # K grid to do grid search for carrying capacity
     max_s = float(input_series.max())
     if k_grid is None:
-        eps = 1e-9  # avoid exact equality with max_s
+        baseline = max_s if max_s > 0 else 1.0
+        eps = max(baseline * 1e-3, 1e-6)
+        start = baseline + eps
         k_grid = np.concatenate(
             [
-                np.linspace(max_s * 0.9 + eps, max_s * 1.1, 8),
-                np.linspace(max_s * 1.1, max_s * 5.0, 25),
-                np.linspace(max_s * 6.0, max_s * 10.0, 10),
+                np.linspace(start, baseline * 1.5 + eps, 8),
+                np.linspace(baseline * 1.5 + eps, baseline * 5.0 + eps, 25),
+                np.linspace(baseline * 6.0 + eps, baseline * 10.0 + eps, 10),
             ]
         )
 
@@ -160,7 +162,7 @@ def fit_piecewise_logistic(
         y_vec = y.to_numpy().astype(float)
 
         # OLS with a tiny ridge for stability (helps when columns are nearly collinear)
-        lam = 1e-6
+        lam = 1e-12
         XtX = X.T @ X
         Xty = X.T @ y_vec
         try:
@@ -297,32 +299,36 @@ def fitted_series_from_params(
         # Pad with last known rate
         r_list = r_list + [r_list[-1] if r_list else 0.0] * (len(seg_bounds) - len(r_list))
 
-    # If intercept not supplied, infer it from observed deltas with provided params
     if gamma_intercept is None:
         y = s.diff().dropna()
-        s_lag = s.shift(1).reindex(y.index).astype(float)
-        # Map each delta row to its segment index
-        seg_idx_per_row: list[int] = []
-        for t in range(y.size):
-            seg_idx = 0
-            for j, (a, b) in enumerate(seg_bounds):
-                if a <= t <= b:
-                    seg_idx = j
-                    break
-            seg_idx_per_row.append(seg_idx)
+        if np.any(np.abs(y.to_numpy(dtype=float)) > 1e-12):
+            s_lag = s.shift(1).reindex(y.index).astype(float)
 
-        x_base = s_lag.to_numpy() * (1.0 - s_lag.to_numpy() / float(carrying_capacity))
-        contrib = np.zeros_like(x_base, dtype=float)
-        for t, seg_idx in enumerate(seg_idx_per_row):
-            contrib[t] = float(r_list[seg_idx]) * x_base[t]
+            # Map each delta row to its segment index so we can apply the
+            # corresponding growth rate when reconstructing the intercept.
+            seg_idx_per_row: list[int] = []
+            for t in range(y.size):
+                seg_idx = 0
+                for j, (a, b) in enumerate(seg_bounds):
+                    if a <= t <= b:
+                        seg_idx = j
+                        break
+                seg_idx_per_row.append(seg_idx)
 
-        contrib += float(gamma_pulse) * np.asarray(pulse, dtype=float)
-        contrib += float(gamma_step) * np.asarray(step, dtype=float)
-        if exog is not None and gamma_exog is not None:
-            contrib += float(gamma_exog) * exog
+            x_base = s_lag.to_numpy() * (1.0 - s_lag.to_numpy() / float(carrying_capacity))
+            contrib = np.zeros_like(x_base, dtype=float)
+            for t, seg_idx in enumerate(seg_idx_per_row):
+                contrib[t] = float(r_list[seg_idx]) * x_base[t]
 
-        residual = y.to_numpy(dtype=float) - contrib
-        gamma_intercept = float(np.nanmean(residual)) if residual.size else 0.0
+            contrib += float(gamma_pulse) * np.asarray(pulse, dtype=float)
+            contrib += float(gamma_step) * np.asarray(step, dtype=float)
+            if exog is not None and gamma_exog is not None:
+                contrib += float(gamma_exog) * exog
+
+            residual = y.to_numpy(dtype=float) - contrib
+            gamma_intercept = float(np.nanmean(residual)) if residual.size else 0.0
+        else:
+            gamma_intercept = 0.0
     else:
         gamma_intercept = float(gamma_intercept)
 
