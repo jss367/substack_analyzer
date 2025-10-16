@@ -1,5 +1,6 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 from substack_analyzer.calibration import fit_piecewise_logistic, fitted_series_from_params, forecast_piecewise_logistic
 from substack_analyzer.changepoints import breakpoints_for_segments, detect_and_classify
@@ -13,6 +14,122 @@ def test_fit_piecewise_logistic_minimal():
     assert fit.carrying_capacity > 0
     assert len(fit.segment_growth_rates) == 2
     assert len(fit.fitted_series) == len(s)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {
+            "description": "top-tier newsletter saturating after sustained marketing",
+            "start": 15_000.0,
+            "months": 48,
+            "breakpoints": [12, 24, 36],
+            "carrying_capacity": 500_000.0,
+            "segment_rates": [0.45, 0.30, 0.18, 0.12],
+            "gamma_pulse": 3_500.0,
+            "gamma_step": 1_200.0,
+            "events": lambda idx: pd.DataFrame(
+                {
+                    "date": [idx[14], idx[26]],
+                    "type": ["Brand Campaign", "Referral push"],
+                    "persistence": ["persistent", "transient"],
+                    "cost": [1.0, 1.0],
+                }
+            ),
+            "sse_threshold": 1e-8,
+        },
+        {
+            "description": "small newsletter that eventually breaks out",
+            "start": 300.0,
+            "months": 42,
+            "breakpoints": [18, 30],
+            "carrying_capacity": 90_000.0,
+            "segment_rates": [0.05, 0.10, 0.26],
+            "gamma_pulse": 0.0,
+            "gamma_step": 80.0,
+            "events": lambda idx: pd.DataFrame(
+                {
+                    "date": [idx[24]],
+                    "type": ["Product Launch"],
+                    "persistence": ["persistent"],
+                    "cost": [1.0],
+                }
+            ),
+            "sse_threshold": 1e-10,
+        },
+        {
+            "description": "niche newsletter that stays relatively small but steady",
+            "start": 800.0,
+            "months": 36,
+            "breakpoints": [],
+            "carrying_capacity": 4_000.0,
+            "segment_rates": [0.04],
+            "gamma_pulse": 0.0,
+            "gamma_step": 0.0,
+            "events": lambda idx: None,
+            "sse_threshold": 1e-10,
+        },
+        {
+            "description": "mid-sized publication with seasonal campaigns and a big conference push",
+            "start": 2_500.0,
+            "months": 30,
+            "breakpoints": [10, 20],
+            "carrying_capacity": 75_000.0,
+            "segment_rates": [0.07, 0.09, 0.12],
+            "gamma_pulse": 420.0,
+            "gamma_step": 260.0,
+            "events": lambda idx: pd.DataFrame(
+                {
+                    "date": [idx[5], idx[11], idx[17], idx[23]],
+                    "type": ["Guest Post", "Holiday Promo", "Guest Post", "Conference"],
+                    "persistence": ["transient", "transient", "transient", "persistent"],
+                    "cost": [1.0, 1.5, 1.0, 1.0],
+                }
+            ),
+            "sse_threshold": 1e-8,
+        },
+    ],
+    ids=lambda case: case["description"],
+)
+def test_fit_piecewise_logistic_handles_realistic_growth_profiles(case):
+    idx = pd.period_range("2020-01", periods=case["months"], freq="M").to_timestamp("M")
+    base_series = pd.Series([case["start"]] * len(idx), index=idx)
+
+    events_df = case["events"](idx)
+
+    total_series = fitted_series_from_params(
+        total_series=base_series,
+        breakpoints=case["breakpoints"],
+        carrying_capacity=case["carrying_capacity"],
+        segment_growth_rates=case["segment_rates"],
+        events_df=events_df,
+        gamma_pulse=case["gamma_pulse"],
+        gamma_step=case["gamma_step"],
+    )
+
+    fit = fit_piecewise_logistic(
+        total_series,
+        breakpoints=case["breakpoints"],
+        events_df=events_df,
+        k_grid=[case["carrying_capacity"]],
+    )
+
+    assert fit.sse < case["sse_threshold"], f"{case['description']} SSE too high: {fit.sse}"
+    assert np.isclose(
+        fit.carrying_capacity,
+        case["carrying_capacity"],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    assert np.allclose(
+        fit.segment_growth_rates,
+        case["segment_rates"],
+        rtol=1e-6,
+        atol=1e-6,
+    )
+    assert np.isclose(fit.gamma_pulse, case["gamma_pulse"], atol=1e-6)
+    assert np.isclose(fit.gamma_step, case["gamma_step"], atol=1e-6)
+    assert fit.r2_on_deltas > 0.999999
 
 
 def test_forecast_piecewise_logistic_shapes():
