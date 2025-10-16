@@ -125,8 +125,10 @@ def fit_piecewise_logistic(
     # K grid to do grid search for carrying capacity
     max_s = float(input_series.max())
     if k_grid is None:
+        eps = 1e-9  # avoid exact equality with max_s
         k_grid = np.concatenate(
             [
+                np.linspace(max_s * 0.9 + eps, max_s * 1.1, 8),
                 np.linspace(max_s * 1.1, max_s * 5.0, 25),
                 np.linspace(max_s * 6.0, max_s * 10.0, 10),
             ]
@@ -135,26 +137,21 @@ def fit_piecewise_logistic(
     best: Optional[PiecewiseLogisticFit] = None
     best_sse = np.inf
 
+    # Precompute Δ-space segment masks for efficiency and stability
+    masks: list[np.ndarray] = []
+    for start, end in seg_bounds:
+        mask = np.zeros(n, dtype=float)
+        lo = max(0, start)
+        hi = min(n, end + 1)
+        if lo < hi:
+            mask[lo:hi] = 1.0
+        masks.append(mask)
+
     for K in k_grid:
         X_base = (s_lag * (1.0 - s_lag / K)).to_numpy().astype(float)
-        # Design matrix: one column per segment (X_base masked), plus pulse, step, optional exog
-        X_cols: list[np.ndarray] = []
-        for start, end in seg_bounds:
-            if end < start:  # empty
-                continue
-            # seg_bounds are already in Δ-space → no shift
-            lo = max(0, start)  # inclusive
-            hi = min(n, end + 1)  # exclusive
-
-            mask = np.zeros(n, dtype=float)
-            if lo < hi:  # segment has rows → mark them
-                mask[lo:hi] = 1.0
-            # else: leave mask as all zeros (keeps a column for this segment)
-
-            X_cols.append(X_base * mask)
-        # Global intercept in ΔS design
-        const = np.ones(n, dtype=float)
-        X_cols.append(const)
+        # Build design matrix from precomputed masks
+        X_cols: list[np.ndarray] = [(X_base * m) for m in masks]
+        X_cols.append(np.ones(n, dtype=float))  # intercept
         X_cols.append(pulse)
         X_cols.append(step)
         if exog is not None:
@@ -162,16 +159,15 @@ def fit_piecewise_logistic(
         X = np.column_stack(X_cols)
         y_vec = y.to_numpy().astype(float)
 
-        # OLS via least squares with ridge fallback if ill-conditioned
+        # OLS with a tiny ridge for stability (helps when columns are nearly collinear)
+        lam = 1e-6
+        XtX = X.T @ X
+        Xty = X.T @ y_vec
         try:
-            beta, _, _, _ = np.linalg.lstsq(X, y_vec, rcond=None)
+            beta = np.linalg.solve(XtX + lam * np.eye(X.shape[1]), Xty)
         except np.linalg.LinAlgError:
-            # fall back to ridge
-            lam = 1e-6
-            try:
-                beta = np.linalg.solve(X.T @ X + lam * np.eye(X.shape[1]), X.T @ y_vec)
-            except Exception:
-                continue
+            # very rare; fall back to lstsq
+            beta, _, _, _ = np.linalg.lstsq(X, y_vec, rcond=None)
 
         # Unpack parameters
         r_segments = [float(b) for b in beta[:num_segments]]
@@ -264,7 +260,7 @@ def fitted_series_from_params(
     gamma_pulse: float = 0.0,
     gamma_step: float = 0.0,
     gamma_exog: Optional[float] = None,
-    gamma_intercept: float = 0.0,
+    gamma_intercept: Optional[float] = None,
 ) -> pd.Series:
     """
     This takes the parameters and uses uses them to predict the future.
@@ -287,12 +283,48 @@ def fitted_series_from_params(
         except Exception:
             exog = None
 
+    # Sanitise breakpoints in the same manner as the fitter
+    n_series = len(s)
+    if breakpoints:
+        bps = sorted({int(b) for b in breakpoints if 1 <= int(b) <= max(n_series - 2, 1)})
+    else:
+        bps = []
+
     # Segment bounds on the original series index
-    seg_bounds = _segments_from_breakpoints(len(s), list(breakpoints or []))
+    seg_bounds = _segments_from_breakpoints(n_series, bps)
     r_list = list(segment_growth_rates)
     if len(r_list) < len(seg_bounds):
         # Pad with last known rate
         r_list = r_list + [r_list[-1] if r_list else 0.0] * (len(seg_bounds) - len(r_list))
+
+    # If intercept not supplied, infer it from observed deltas with provided params
+    if gamma_intercept is None:
+        y = s.diff().dropna()
+        s_lag = s.shift(1).reindex(y.index).astype(float)
+        # Map each delta row to its segment index
+        seg_idx_per_row: list[int] = []
+        for t in range(y.size):
+            seg_idx = 0
+            for j, (a, b) in enumerate(seg_bounds):
+                if a <= t <= b:
+                    seg_idx = j
+                    break
+            seg_idx_per_row.append(seg_idx)
+
+        x_base = s_lag.to_numpy() * (1.0 - s_lag.to_numpy() / float(carrying_capacity))
+        contrib = np.zeros_like(x_base, dtype=float)
+        for t, seg_idx in enumerate(seg_idx_per_row):
+            contrib[t] = float(r_list[seg_idx]) * x_base[t]
+
+        contrib += float(gamma_pulse) * np.asarray(pulse, dtype=float)
+        contrib += float(gamma_step) * np.asarray(step, dtype=float)
+        if exog is not None and gamma_exog is not None:
+            contrib += float(gamma_exog) * exog
+
+        residual = y.to_numpy(dtype=float) - contrib
+        gamma_intercept = float(np.nanmean(residual)) if residual.size else 0.0
+    else:
+        gamma_intercept = float(gamma_intercept)
 
     s_hat = [float(s.iloc[0])]
     for t in range(1, s.size):
