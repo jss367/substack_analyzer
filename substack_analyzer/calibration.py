@@ -125,12 +125,15 @@ def fit_piecewise_logistic(
     # K grid to do grid search for carrying capacity
     max_s = float(input_series.max())
     if k_grid is None:
-        eps = 1e-9  # avoid exact equality with max_s
+        # Ensure K is strictly greater than max_s with a relative epsilon to avoid degeneracy
+        baseline = max_s if max_s > 0.0 else 1.0
+        eps = max(baseline * 1e-3, 1e-6)
+        start = baseline + eps
         k_grid = np.concatenate(
             [
-                np.linspace(max_s * 0.9 + eps, max_s * 1.1, 8),
-                np.linspace(max_s * 1.1, max_s * 5.0, 25),
-                np.linspace(max_s * 6.0, max_s * 10.0, 10),
+                np.linspace(start, baseline * 1.5 + eps, 8),
+                np.linspace(baseline * 1.5 + eps, baseline * 5.0 + eps, 25),
+                np.linspace(baseline * 6.0 + eps, baseline * 10.0 + eps, 10),
             ]
         )
 
