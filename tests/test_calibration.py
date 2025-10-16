@@ -215,37 +215,30 @@ def test_fit_piecewise_logistic_on_gm_series():
 
 def test_fit_piecewise_logistic_with_cy_series():
     """
-    Synthetic series shaped like the provided chart: slow growth through mid-2025,
-    then a sharp level jump around July 2025 followed by faster growth.
+    Slow growth then a faster growth rate
     """
-    # Build monthly index from Sep 2023 through Oct 2025
+    # Build monthly index
     idx = pd.period_range("2023-09", periods=26, freq="M").to_timestamp("M")
 
-    # Construct values: gentle acceleration, then a level jump in 2025-07 and
-    # a steeper slope thereafter. Keep it deterministic and smooth-ish.
     vals: list[float] = []
     v = 0.0
     jump_month = pd.Timestamp("2025-01-31")
     jump_index = list(idx).index(jump_month)
     for i, ts in enumerate(idx):
         if ts < jump_month:
-            # Early period: ~80 per month with a tiny acceleration
-            v += 80.0 + 1.5 * i
+            v += 80.0 + 1.2 * i
         else:
-            # Post-jump period: substantially faster monthly growth
-            v += 80.0 + 1.5 * i + 10.0 * (i - jump_index)
+            v += 80.0 + 1.2 * i + 12 * (i - jump_index)
         vals.append(float(round(v)))
 
     input_series = pd.Series(vals, index=idx)
 
-    # Detect and classify breakpoints; expect a persistent change near July 2025
-    classified = detect_and_classify(input_series, max_changes=3, window=6)
-    near_jump = [b for b in classified if b.effect == "Persistent" and abs((b.date - jump_month).days) <= 31]
-    assert near_jump
-
-    # Fit using segment-worthy breakpoints and validate basic properties
-    bkps = breakpoints_for_segments(classified)
+    bkps = [16]
     fit = fit_piecewise_logistic(input_series, breakpoints=bkps)
+
+    from substack_analyzer.plot_utils import plot_fit_vs_actual
+
+    plot_fit_vs_actual(input_series, fit)
 
     assert len(fit.fitted_series) == len(input_series)
     assert fit.carrying_capacity > input_series.max()

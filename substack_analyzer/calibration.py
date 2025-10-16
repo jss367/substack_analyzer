@@ -105,6 +105,8 @@ def fit_piecewise_logistic(
 
     # Events
     pulse, step = _event_regressors(y.index, events_df)
+    pulse = np.asarray(pd.Series(pulse, index=y.index), dtype=float)
+    step = np.asarray(pd.Series(step, index=y.index), dtype=float)
 
     # Optional exogenous aligned to y index
     exog = None
@@ -119,7 +121,7 @@ def fit_piecewise_logistic(
     # K grid to do grid search for carrying capacity
     max_s = float(input_series.max())
     if k_grid is None:
-        k_grid = np.linspace(max_s * 1.1, max_s * 5.0, num=25)
+        k_grid = np.concatenate([np.linspace(max_s * 1.1, max_s * 5.0, 25), np.linspace(max_s * 6.0, max_s * 10.0, 10)])
 
     best: Optional[PiecewiseLogisticFit] = None
     best_sse = np.inf
@@ -129,13 +131,18 @@ def fit_piecewise_logistic(
         # Design matrix: one column per segment (X_base masked), plus pulse, step, optional exog
         X_cols: list[np.ndarray] = []
         for start, end in seg_bounds:
+            if end < start:  # empty
+                continue
             mask = np.zeros(n, dtype=float)
-            mask[start : end + 1] = 1.0
-            X_cols.append(X_base * mask)
-        X_cols.append(pulse.astype(float))
-        X_cols.append(step.astype(float))
+            lo = max(0, start)
+            hi = min(n, end + 1)  # marks i in [start, end]
+            if lo >= hi:
+                continue
+            X_cols.append(X_base * mask.__setitem__(slice(lo, hi), 1.0) or mask)
+        X_cols.append(pulse)
+        X_cols.append(step)
         if exog is not None:
-            X_cols.append(exog.astype(float))
+            X_cols.append(exog)
         X = np.column_stack(X_cols)
         y_vec = y.to_numpy().astype(float)
 
