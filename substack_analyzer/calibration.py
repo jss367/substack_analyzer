@@ -17,6 +17,7 @@ class PiecewiseLogisticFit:
     sse: float
     r2_on_deltas: float
     gamma_exog: Optional[float] = None
+    gamma_intercept: float = 0.0
 
 
 def _ensure_month_end_index(series: pd.Series) -> pd.Series:
@@ -151,7 +152,9 @@ def fit_piecewise_logistic(
             # else: leave mask as all zeros (keeps a column for this segment)
 
             X_cols.append(X_base * mask)
-
+        # Global intercept in ΔS design
+        const = np.ones(n, dtype=float)
+        X_cols.append(const)
         X_cols.append(pulse)
         X_cols.append(step)
         if exog is not None:
@@ -172,9 +175,10 @@ def fit_piecewise_logistic(
 
         # Unpack parameters
         r_segments = [float(b) for b in beta[:num_segments]]
-        gamma_pulse = float(beta[num_segments])
-        gamma_step = float(beta[num_segments + 1])
-        beta_offset = num_segments + 2
+        gamma_intercept = float(beta[num_segments])
+        gamma_pulse = float(beta[num_segments + 1])
+        gamma_step = float(beta[num_segments + 2])
+        beta_offset = num_segments + 3
         gamma_exog = float(beta[beta_offset]) if exog is not None and len(beta) > beta_offset else None
 
         # Reconstruct fitted series recursively
@@ -187,7 +191,7 @@ def fit_piecewise_logistic(
                 if (t - 1) >= a and (t - 1) <= b:
                     seg_idx = j
                     break
-            delta = r_segments[seg_idx] * x_t
+            delta = gamma_intercept + r_segments[seg_idx] * x_t
             # Add events
             if t - 1 < len(pulse):
                 delta += gamma_pulse * float(pulse[t - 1])
@@ -208,7 +212,7 @@ def fit_piecewise_logistic(
         fit = PiecewiseLogisticFit(
             carrying_capacity=float(K),
             segment_growth_rates=r_segments,
-            breakpoints=breakpoints,
+            breakpoints=bps,
             gamma_pulse=gamma_pulse,
             gamma_step=gamma_step,
             fitted_series=fitted,
@@ -216,6 +220,7 @@ def fit_piecewise_logistic(
             sse=sse,
             r2_on_deltas=float(r2),
             gamma_exog=gamma_exog,
+            gamma_intercept=gamma_intercept,
         )
 
         if sse < best_sse:
@@ -259,6 +264,7 @@ def fitted_series_from_params(
     gamma_pulse: float = 0.0,
     gamma_step: float = 0.0,
     gamma_exog: Optional[float] = None,
+    gamma_intercept: float = 0.0,
 ) -> pd.Series:
     """
     This takes the parameters and uses uses them to predict the future.
@@ -297,7 +303,7 @@ def fitted_series_from_params(
             if (t - 1) >= a and (t - 1) <= b:
                 seg_idx = j
                 break
-        delta = float(r_list[seg_idx]) * x_t
+        delta = float(gamma_intercept) + float(r_list[seg_idx]) * x_t
         if t - 1 < len(pulse):
             delta += float(gamma_pulse) * float(pulse[t - 1])
             delta += float(gamma_step) * float(step[t - 1])
