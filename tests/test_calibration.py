@@ -353,7 +353,7 @@ def test_fit_piecewise_logistic_with_cy_series():
     bkps = [16]
     fit = fit_piecewise_logistic(input_series, breakpoints=bkps)
 
-    from substack_analyzer.plot_utils import plot_fit_vs_actual
+    # from substack_analyzer.plot_utils import plot_fit_vs_actual
 
     # plot_fit_vs_actual(input_series, fit)
 
